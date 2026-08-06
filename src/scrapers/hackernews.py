@@ -140,5 +140,9 @@ class HackerNewsScraper(BaseScraper):
                 "discussion_url": hn_discussion_url,
                 "comment_count": len(comments),
                 "category": self.config.get("category"),
+                "engagement": {
+                    "points": story.get("score", 0),
+                    "comments": story.get("descendants", 0),
+                },
             }
         )

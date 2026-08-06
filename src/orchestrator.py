@@ -1,6 +1,8 @@
 """Main orchestrator coordinating the entire workflow."""
 
 import asyncio
+import json
+import inspect
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -26,6 +28,9 @@ from .scrapers.openbb import OpenBBScraper
 from .scrapers.ossinsight import OSSInsightScraper
 from .scrapers.gdelt import GDELTScraper
 from .scrapers.google_news import GoogleNewsScraper
+from .scrapers.bilibili import BilibiliScraper
+from .scrapers.aihot import AIHotScraper
+from .processing.engagement import EngagementTracker
 from .ai.client import create_ai_client
 from .ai.analyzer import ContentAnalyzer
 from .ai.summarizer import DailySummarizer
@@ -218,7 +223,7 @@ class HorizonOrchestrator:
         )
         self.last_fetch_report: Optional[FetchReport] = None
 
-    async def run(self, force_hours: int = None) -> None:
+    async def run(self, force_hours: int = None, resume_cache: str | None = None) -> None:
         """Execute the complete workflow.
 
         Args:
@@ -239,28 +244,28 @@ class HorizonOrchestrator:
             self.email_manager.check_subscriptions(self.storage)
 
         try:
-            # 1. Determine time window
+            # 1-3. Fetch/merge, or resume from a previously persisted merged cache.
             since = self._determine_time_window(force_hours)
-            self.console.print(
-                f"{self.icons['date']} Fetching content since: "
-                f"{since.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
-
-            # 2. Fetch content from all sources
-            all_items = await self.fetch_all_sources(since)
-            self.console.print(
-                f"{self.icons['fetched']} Fetched {len(all_items)} items from all sources\n"
-            )
-
-            if self.last_fetch_report and self.last_fetch_report.all_failed:
-                raise RuntimeError(self.last_fetch_report.failure_message())
-
-            if not all_items:
-                self.console.print("[yellow]No new content found. Exiting.[/yellow]")
-                return
-
-            # 3. Merge cross-source duplicates (same URL from different sources)
-            merged_items = self.merge_cross_source_duplicates(all_items)
+            if resume_cache:
+                merged_items = self._load_items_cache(Path(resume_cache))
+                all_items = merged_items
+                self.console.print(f"{self.icons['merge']} Resumed {len(merged_items)} items from cache: {resume_cache}\n")
+            else:
+                self.console.print(
+                    f"{self.icons['date']} Fetching content since: "
+                    f"{since.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+                all_items = await self.fetch_all_sources(since)
+                self.console.print(f"{self.icons['fetched']} Fetched {len(all_items)} items from all sources\n")
+                if self.last_fetch_report and self.last_fetch_report.all_failed:
+                    raise RuntimeError(self.last_fetch_report.failure_message())
+                if not all_items:
+                    self.console.print("[yellow]No new content found. Exiting.[/yellow]")
+                    return
+                merged_items = self.merge_cross_source_duplicates(all_items)
+                merged_cache = self._cache_path("merged")
+                self._save_items_cache(merged_cache, merged_items)
+                self.console.print(f"   Saved merged cache: {merged_cache}")
             if len(merged_items) < len(all_items):
                 self.console.print(
                     f"{self.icons['merge']} Merged "
@@ -269,7 +274,11 @@ class HorizonOrchestrator:
                 )
 
             # 4. Analyze with AI
-            analyzed_items = await self.analyze_items(merged_items)
+            analysis_checkpoint = self._cache_path("analysis")
+            if "checkpoint_path" in inspect.signature(self.analyze_items).parameters:
+                analyzed_items = await self.analyze_items(merged_items, checkpoint_path=analysis_checkpoint)
+            else:
+                analyzed_items = await self.analyze_items(merged_items)
             self.console.print(
                 f"{self.icons['ai']} Analyzed {len(analyzed_items)} items with AI\n"
             )
@@ -421,6 +430,17 @@ class HorizonOrchestrator:
             List[ContentItem]: All fetched items
         """
         self.last_fetch_report = None
+        requested_since = since
+        tracking_cfg = getattr(
+            getattr(self.config, "collection", None),
+            "engagement_tracking",
+            None,
+        )
+        if tracking_cfg and tracking_cfg.enabled:
+            refresh_since = datetime.now(timezone.utc) - timedelta(
+                hours=tracking_cfg.lookback_hours
+            )
+            since = min(since, refresh_since)
         async with httpx.AsyncClient(timeout=30.0) as client:
             tasks = []
 
@@ -483,6 +503,16 @@ class HorizonOrchestrator:
                 gn_scraper = GoogleNewsScraper(self.config.sources.google_news, client)
                 tasks.append(self._fetch_with_progress("Google News", gn_scraper, since))
 
+            # Bilibili public web search (no login or token required)
+            if self.config.sources.bilibili.enabled:
+                bili_scraper = BilibiliScraper(self.config.sources.bilibili, client)
+                tasks.append(self._fetch_with_progress("Bilibili", bili_scraper, since))
+
+            # AI HOT v1 is an anonymous, read-only discovery supplement.
+            if getattr(self.config.sources, "aihot", None) and self.config.sources.aihot.enabled:
+                aihot_scraper = AIHotScraper(self.config.sources.aihot, client)
+                tasks.append(self._fetch_with_progress("AI HOT", aihot_scraper, since))
+
             # Fetch all concurrently
             outcomes = await asyncio.gather(*tasks)
             self.last_fetch_report = FetchReport(outcomes=list(outcomes))
@@ -491,6 +521,25 @@ class HorizonOrchestrator:
             all_items: List[ContentItem] = []
             for outcome in outcomes:
                 all_items.extend(outcome.items)
+
+            if tracking_cfg and tracking_cfg.enabled:
+                thresholds = {
+                    key: value.model_dump(mode="json")
+                    for key, value in tracking_cfg.thresholds.items()
+                }
+                tracker = EngagementTracker(
+                    self.storage.data_dir / tracking_cfg.state_filename,
+                    refresh_after_hours=tracking_cfg.refresh_after_hours,
+                    thresholds=thresholds or None,
+                )
+                rising_ids = {
+                    item.id for item in tracker.observe(all_items)
+                }
+                all_items = [
+                    item
+                    for item in all_items
+                    if item.published_at >= requested_since or item.id in rising_ids
+                ]
 
             return all_items
 
@@ -1045,7 +1094,7 @@ class HorizonOrchestrator:
         self.console.print("")
         return result
 
-    async def analyze_items(self, items: List[ContentItem]) -> List[ContentItem]:
+    async def analyze_items(self, items: List[ContentItem], checkpoint_path: Path | None = None) -> List[ContentItem]:
         """Analyze content items with AI.
 
         Args:
@@ -1059,7 +1108,29 @@ class HorizonOrchestrator:
         ai_client = create_ai_client(self.config.ai)
         analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
 
-        return await analyzer.analyze_batch(items)
+        return await analyzer.analyze_batch(items, checkpoint_path=checkpoint_path)
+
+    def _cache_path(self, stage: str) -> Path:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        cache_root = Path(getattr(self.storage, "data_dir", "data"))
+        cache_dir = cache_root / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / f"horizon-{stage}-{stamp}.json"
+
+    @staticmethod
+    def _save_items_cache(path: Path, items: List[ContentItem]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps([item.model_dump(mode="json") for item in items], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _load_items_cache(path: Path) -> List[ContentItem]:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ValueError(f"Cache must contain a list: {path}")
+        return [ContentItem.model_validate(item) for item in payload]
 
     async def _generate_summary(
         self,

@@ -47,9 +47,35 @@ def make_sources(**overrides):  # type: ignore[no-untyped-def]
         "ossinsight": SimpleNamespace(enabled=False),
         "gdelt": None,
         "google_news": None,
+        "bilibili": SimpleNamespace(enabled=False),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_bilibili_source_is_wired_into_fetch_reporting(monkeypatch) -> None:
+    orchestrator = make_orchestrator()
+    kept = ContentItem(
+        id="bilibili:video:BV1test",
+        source_type=SourceType.BILIBILI,
+        title="test",
+        url="https://www.bilibili.com/video/BV1test",
+        published_at=SINCE,
+    )
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        sources=make_sources(bilibili=SimpleNamespace(enabled=True)),
+        extractors={},
+    )
+    monkeypatch.setattr(
+        "src.orchestrator.BilibiliScraper",
+        lambda config, client: StubScraper([kept]),
+    )
+
+    items = asyncio.run(orchestrator.fetch_all_sources(SINCE))
+
+    assert items == [kept]
+    assert orchestrator.last_fetch_report is not None
+    assert orchestrator.last_fetch_report.outcomes[0].source_name == "Bilibili"
 
 
 class StubScraper:

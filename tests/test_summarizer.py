@@ -157,6 +157,81 @@ def test_generate_summary_zh_uses_localized_selection_header_and_numeric_date():
     assert "Apr 25, 08:00" not in result
 
 
+def test_generate_summary_renders_topic_radar_as_chinese_topic_cards():
+    item = _make_item(1)
+    item.profile = "pangmen-topic-radar"
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title="用AI改造汇报流程",
+        blocks=[
+            ContentBlock(id="what_happened", type="section", title="发生了什么", content="工具新增了可复用的汇报自动化流程。", primary=True),
+            ContentBlock(id="audience_problem", type="section", title="适合谁、解决什么问题", content="适合需要反复做周报的职场人。"),
+            ContentBlock(id="recommended_angle", type="section", title="推荐切入点", content="把一小时周报压缩成十分钟。"),
+            ContentBlock(id="demo_or_case", type="section", title="演示或案例建议", content="录屏展示导入素材到生成大纲。"),
+            ContentBlock(id="content_format", type="section", title="推荐内容形式", content="录屏教程。"),
+            ContentBlock(id="priority_reason", type="section", title="优先级及理由", content="P0：痛点明确且可演示。"),
+            ContentBlock(id="verification", type="section", title="待核实信息", content="确认免费额度和地区限制。"),
+        ],
+    )
+
+    result = _run_async(
+        DailySummarizer().generate_summary([item], "2026-04-25", 10, "zh")
+    )
+
+    assert "# 旁门左道PPT · 新媒体选题雷达 - 2026-04-25" in result
+    assert "> 从 10 条资讯中筛选出 1 个可做视频的选题。" in result
+    assert "## 选题卡" in result
+    assert "**原始资讯**：tester · rss ·" in result
+    assert "https://example.com/items/1" in result
+    for field in ("发生了什么", "适合谁、解决什么问题", "推荐切入点", "标签"):
+        assert f"**{field}**" in result
+    assert "演示或案例建议" not in result
+    assert "推荐内容形式" not in result
+    assert "优先级及理由" not in result
+    assert "待核实信息" not in result
+
+
+def test_topic_radar_summary_does_not_pad_recommended_angles_with_generic_fallbacks():
+    item = _make_item(1)
+    item.profile = "pangmen-topic-radar"
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title="WorkBuddy 写入飞书实测",
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="WorkBuddy 新增了通过连接器写入飞书多维表格的能力。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="audience_problem",
+                type="section",
+                title="适合谁、解决什么问题",
+                content="适合需要批量录入客户资料的销售和运营。",
+            ),
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="同一份客户资料，手动录入与 WorkBuddy 写入飞书究竟差几步？",
+            ),
+        ],
+    )
+
+    result = _run_async(
+        DailySummarizer().generate_summary([item], "2026-08-06", 10, "zh")
+    )
+
+    assert result.count("- 同一份客户资料，手动录入与 WorkBuddy 写入飞书究竟差几步？") == 1
+    assert "用前后对比验证实际收益" not in result
+    assert "拆解普通用户能复现的操作路径" not in result
+    assert "核对限制后再判断是否值得跟进" not in result
+
+
 def test_generate_summary_groups_items_by_profile_with_heading_hierarchy():
     news = _make_item(1)
     blog = _make_item(2)

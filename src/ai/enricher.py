@@ -1,8 +1,10 @@
 """Profile-driven content enrichment."""
 
 import asyncio
+from difflib import SequenceMatcher
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, TypeVar
 
@@ -25,6 +27,10 @@ from .prompting.enrichment import (
     artifact_prompt,
     block_prompt,
     item_context,
+    recommended_angle_audit_context,
+    recommended_angle_audit_prompt,
+    recommended_angle_review_context,
+    recommended_angle_review_prompt,
     tool_planning_prompt,
     tool_results_text,
 )
@@ -84,6 +90,51 @@ class GeneratedBlockWithHeader(GeneratedBlock):
         return value
 
 
+class CandidateAngleItem(BaseModel):
+    item_id: str
+    angles: list[str] = Field(min_length=4, max_length=6)
+
+
+class RecommendedAngleCandidates(BaseModel):
+    items: list[CandidateAngleItem]
+
+
+class AuditRemoval(BaseModel):
+    item_id: str
+    angle: str
+    issue_type: str
+    reason: str
+
+
+class RecommendedAngleAudit(BaseModel):
+    removals: list[AuditRemoval] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AngleRejection:
+    item_id: str
+    angle: str
+    reason: str
+    stage: str
+
+
+@dataclass
+class RecommendedAngleReviewResult:
+    generated_count: int = 0
+    rejections: list[AngleRejection] = field(default_factory=list)
+    audit_removals: list[AuditRemoval] = field(default_factory=list)
+    regenerated_item_ids: list[str] = field(default_factory=list)
+    final_counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def final_count(self) -> int:
+        return sum(self.final_counts.values())
+
+    @property
+    def deleted_count(self) -> int:
+        return max(0, self.generated_count - self.final_count)
+
+
 @dataclass
 class EnrichmentBatchResult:
     succeeded_ids: list[str] = field(default_factory=list)
@@ -112,6 +163,8 @@ class EnrichmentBatchResult:
 
 class ContentEnricher:
     """Generate localized block artifacts with profile-scoped tools."""
+
+    ANGLE_REVIEW_BATCH_SIZE = 8
 
     def __init__(
         self,
@@ -155,9 +208,13 @@ class ContentEnricher:
         user: str,
         error_message: str,
         validator: Optional[Callable[[ModelT], None]] = None,
+        max_attempts: int = 2,
+        correction_instruction: str = (
+            "Return only a corrected JSON object."
+        ),
     ) -> ModelT:
         validation_error: Optional[Exception] = None
-        for attempt in range(2):
+        for attempt in range(max_attempts):
             request: dict[str, Any] = {
                 "system": system,
                 "user": user,
@@ -172,9 +229,19 @@ class ContentEnricher:
                 return result
             except (ValidationError, ValueError) as exc:
                 validation_error = exc
+                logger.warning(
+                    "%s response failed validation on attempt %s/%s "
+                    "(response_length=%s, parsed_type=%s): %s",
+                    model.__name__,
+                    attempt + 1,
+                    max_attempts,
+                    len(response or ""),
+                    type(parsed).__name__,
+                    exc,
+                )
                 user += (
                     "\n\nYour previous response did not satisfy the output contract. "
-                    f"Validation error: {exc}. Return only a corrected JSON object."
+                    f"Validation error: {exc}. {correction_instruction}"
                 )
         raise ValueError(error_message) from validation_error
 
@@ -205,7 +272,7 @@ class ContentEnricher:
             task_id = progress.add_task("Enriching", total=len(items))
             outcomes = await asyncio.gather(*(process(item, task_id) for item in items))
 
-        return EnrichmentBatchResult(
+        result = EnrichmentBatchResult(
             succeeded_ids=[item_id for item_id, exc in outcomes if exc is None],
             failures={
                 item_id: f"{type(exc).__name__}: {exc}"
@@ -213,6 +280,467 @@ class ContentEnricher:
                 if exc is not None
             },
         )
+        succeeded = {
+            item_id for item_id in result.succeeded_ids
+        }
+        await self.review_recommended_angles(
+            [item for item in items if item.id in succeeded],
+            language="zh",
+        )
+        return result
+
+    async def review_recommended_angles(
+        self,
+        items: list[ContentItem],
+        *,
+        language: str = "zh",
+    ) -> RecommendedAngleReviewResult:
+        """Generate candidates, filter them, then audit all Pangmen angles."""
+        result = RecommendedAngleReviewResult()
+        if language != "zh" or language not in self.languages:
+            return result
+        candidates = [
+            item
+            for item in items
+            if item.processing
+            and item.processing.classification.profile == "pangmen-topic-radar"
+            and item.processing.artifacts.get(language)
+            and self._artifact_block(item, language, "recommended_angle")
+        ]
+        if not candidates:
+            return result
+
+        for start in range(0, len(candidates), self.ANGLE_REVIEW_BATCH_SIZE):
+            chunk = candidates[start : start + self.ANGLE_REVIEW_BATCH_SIZE]
+            await self._generate_and_filter_angle_chunk(
+                chunk, language, result
+            )
+        for _ in range(3):
+            regenerated = await self._audit_recommended_angles(
+                candidates, language, result
+            )
+            if not regenerated:
+                break
+        else:
+            raise ValueError(
+                "recommended angle audit repeatedly removed every angle for an item"
+            )
+        result.final_counts = {
+            item.id: len(
+                self._split_angles(
+                    self._artifact_block_content(
+                        item, language, "recommended_angle"
+                    )
+                )
+            )
+            for item in candidates
+        }
+        return result
+
+    async def _generate_and_filter_angle_chunk(
+        self,
+        items: list[ContentItem],
+        language: str,
+        result: RecommendedAngleReviewResult,
+    ) -> None:
+        generated = await self._request_angle_candidates(items, language)
+        filtered: dict[str, list[str]] = {}
+        for item in items:
+            item_candidates = generated[item.id]
+            result.generated_count += len(item_candidates)
+            kept, rejected = self._filter_recommended_angle_candidates(
+                item, item_candidates
+            )
+            result.rejections.extend(rejected)
+            if not kept:
+                kept = await self._regenerate_one_item_angles(
+                    item,
+                    language,
+                    result,
+                    "; ".join(rejection.reason for rejection in rejected),
+                )
+            filtered[item.id] = kept
+        self._apply_reviewed_angles(items, language, filtered)
+
+    async def _request_angle_candidates(
+        self,
+        items: list[ContentItem],
+        language: str,
+        failure_note: str = "",
+    ) -> dict[str, list[str]]:
+        expected = {item.id for item in items}
+
+        def validate_candidates(review: RecommendedAngleCandidates) -> None:
+            returned_ids = [entry.item_id for entry in review.items]
+            if len(returned_ids) != len(set(returned_ids)):
+                raise ValueError("duplicate item_id in angle candidates")
+            if set(returned_ids) != expected:
+                raise ValueError(
+                    "angle candidates must return every input item exactly once"
+                )
+
+        user = recommended_angle_review_context(
+            self._recommended_angle_payload(items, language)
+        )
+        if failure_note:
+            user += (
+                "\n\n# 上一轮候选全部无效，必须重新生成\n\n"
+                + failure_note
+            )
+        review = await self._complete_model(
+            RecommendedAngleCandidates,
+            system=recommended_angle_review_prompt(),
+            user=user,
+            error_message="Invalid recommended angle candidates",
+            validator=validate_candidates,
+        )
+        return {entry.item_id: entry.angles for entry in review.items}
+
+    async def _regenerate_one_item_angles(
+        self,
+        item: ContentItem,
+        language: str,
+        result: RecommendedAngleReviewResult,
+        failure_note: str,
+    ) -> list[str]:
+        latest_rejected: list[AngleRejection] = []
+        for attempt in range(2):
+            note = failure_note
+            if latest_rejected:
+                note += (
+                    "\n上一轮单条重生仍全部无效，必须避开这些问题："
+                    + "; ".join(rejection.reason for rejection in latest_rejected)
+                )
+            generated = await self._request_angle_candidates(
+                [item], language, note
+            )
+            candidates = generated[item.id]
+            result.generated_count += len(candidates)
+            result.regenerated_item_ids.append(item.id)
+            kept, latest_rejected = self._filter_recommended_angle_candidates(
+                item, candidates, stage=f"regeneration-{attempt + 1}"
+            )
+            result.rejections.extend(latest_rejected)
+            if kept:
+                self._apply_reviewed_angles(
+                    [item], language, {item.id: kept}
+                )
+                return kept
+        reasons = "; ".join(
+            rejection.reason for rejection in latest_rejected
+        )
+        raise ValueError(
+            f"all regenerated recommended angles were invalid for {item.id}: {reasons}"
+        )
+
+    async def _audit_recommended_angles(
+        self,
+        items: list[ContentItem],
+        language: str,
+        result: RecommendedAngleReviewResult,
+    ) -> bool:
+        expected = {item.id: item for item in items}
+        payload = [
+            {
+                "item_id": item.id,
+                "topic_title": item.processing.artifacts[language].title,
+                "angles": self._split_angles(
+                    self._artifact_block_content(
+                        item, language, "recommended_angle"
+                    )
+                ),
+            }
+            for item in items
+        ]
+
+        def validate_audit(audit: RecommendedAngleAudit) -> None:
+            removal_keys = [
+                (entry.item_id, self._normalize_angle(entry.angle))
+                for entry in audit.removals
+            ]
+            if len(removal_keys) != len(set(removal_keys)):
+                raise ValueError("duplicate removal in angle audit")
+            if not {entry.item_id for entry in audit.removals}.issubset(expected):
+                raise ValueError("angle audit returned an unknown item_id")
+            proposed = {
+                item.id: self._split_angles(
+                    self._artifact_block_content(
+                        item, language, "recommended_angle"
+                    )
+                )
+                for item in items
+            }
+            for removal in audit.removals:
+                if removal.angle not in proposed[removal.item_id]:
+                    raise ValueError(
+                        "angle audit removal must exactly match an input angle"
+                    )
+                proposed[removal.item_id].remove(removal.angle)
+            self._validate_angle_collection(proposed, expected)
+
+        audit = await self._complete_model(
+            RecommendedAngleAudit,
+            system=recommended_angle_audit_prompt(),
+            user=recommended_angle_audit_context(payload),
+            error_message="Invalid recommended angle audit",
+            validator=validate_audit,
+            max_attempts=3,
+            correction_instruction=(
+                '只返回一个合法 JSON 对象，顶层必须是 {"removals": [...]}；'
+                '没有删除项时必须返回 {"removals": []}，不要输出解释或 Markdown。'
+            ),
+        )
+        remaining = {
+            item.id: self._split_angles(
+                self._artifact_block_content(
+                    item, language, "recommended_angle"
+                )
+            )
+            for item in items
+        }
+        for removal in audit.removals:
+            remaining[removal.item_id].remove(removal.angle)
+        result.audit_removals.extend(audit.removals)
+        self._apply_reviewed_angles(items, language, remaining)
+
+        regenerated = False
+        for item in items:
+            if remaining[item.id]:
+                continue
+            await self._regenerate_one_item_angles(
+                item,
+                language,
+                result,
+                "全量审计删除了该选题的全部候选，请生成全新且具体的角度。",
+            )
+            regenerated = True
+        return regenerated
+
+    def _filter_recommended_angle_candidates(
+        self,
+        item: ContentItem,
+        candidates: list[str],
+        stage: str = "local",
+    ) -> tuple[list[str], list[AngleRejection]]:
+        kept: list[str] = []
+        rejected: list[AngleRejection] = []
+        for raw_angle in candidates:
+            angle = re.sub(r"\s+", " ", str(raw_angle)).strip()
+            try:
+                self._validate_recommended_angle(angle, item)
+            except ValueError as exc:
+                rejected.append(
+                    AngleRejection(item.id, angle, str(exc), stage)
+                )
+                continue
+            if any(
+                SequenceMatcher(
+                    None,
+                    self._normalize_angle(angle),
+                    self._normalize_angle(existing),
+                ).ratio()
+                >= 0.82
+                for existing in kept
+            ):
+                rejected.append(
+                    AngleRejection(
+                        item.id,
+                        angle,
+                        "semantic duplicate within the same topic",
+                        stage,
+                    )
+                )
+                continue
+            if len(kept) >= 4:
+                rejected.append(
+                    AngleRejection(
+                        item.id,
+                        angle,
+                        "lower-ranked candidate beyond the final maximum of four",
+                        stage,
+                    )
+                )
+                continue
+            kept.append(angle)
+        return kept, rejected
+
+    def _recommended_angle_payload(
+        self, items: list[ContentItem], language: str
+    ) -> list[dict[str, Any]]:
+        payload = []
+        for item in items:
+            artifact = item.processing.artifacts[language]
+            analysis = item.processing.analysis
+            payload.append(
+                {
+                    "item_id": item.id,
+                    "topic_title": artifact.title,
+                    "source_title": item.title,
+                    "analysis_summary": analysis.summary if analysis else "",
+                    "what_happened": self._artifact_block_content(
+                        item, language, "what_happened"
+                    ),
+                    "audience_problem": self._artifact_block_content(
+                        item, language, "audience_problem"
+                    ),
+                    "current_angles": self._split_angles(
+                        self._artifact_block_content(
+                            item, language, "recommended_angle"
+                        )
+                    ),
+                }
+            )
+        return payload
+
+    def _validate_angle_collection(
+        self,
+        angles_by_id: dict[str, list[str]],
+        expected: dict[str, ContentItem],
+    ) -> None:
+        seen_angles: dict[str, str] = {}
+        for item_id, angles in angles_by_id.items():
+            item = expected[item_id]
+            for angle in angles:
+                self._validate_recommended_angle(angle, item)
+                normalized = self._normalize_angle(angle)
+                previous = seen_angles.get(normalized)
+                if previous is not None:
+                    raise ValueError(
+                        f"duplicate recommended angle for {previous} and {item_id}"
+                    )
+                seen_angles[normalized] = item_id
+
+    def _apply_reviewed_angles(
+        self,
+        items: list[ContentItem],
+        language: str,
+        angles_by_id: dict[str, list[str]],
+    ) -> None:
+        for item in items:
+            if item.id not in angles_by_id:
+                continue
+            block = self._artifact_block(item, language, "recommended_angle")
+            if block is not None:
+                block.content = "\n".join(angles_by_id[item.id])
+
+    @staticmethod
+    def _artifact_block(
+        item: ContentItem, language: str, block_id: str
+    ) -> Optional[ContentBlock]:
+        artifact = item.processing.artifacts.get(language) if item.processing else None
+        if not artifact:
+            return None
+        return next((block for block in artifact.blocks if block.id == block_id), None)
+
+    @classmethod
+    def _artifact_block_content(
+        cls, item: ContentItem, language: str, block_id: str
+    ) -> str:
+        block = cls._artifact_block(item, language, block_id)
+        return block.content if block else ""
+
+    @staticmethod
+    def _split_angles(content: str) -> list[str]:
+        angles = []
+        for raw in re.split(r"\r?\n+|[；;]+", content or ""):
+            angle = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", raw).strip()
+            if angle:
+                angles.append(angle)
+        return angles[:4]
+
+    @staticmethod
+    def _normalize_angle(angle: str) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", angle.lower())
+
+    @classmethod
+    def _validate_recommended_angle(
+        cls, angle: str, item: ContentItem
+    ) -> None:
+        if "\n" in angle or "\r" in angle:
+            raise ValueError(
+                f"recommended angle must be one sentence: {angle}"
+            )
+        value = re.sub(r"\s+", " ", angle).strip()
+        if len(value) > 45:
+            raise ValueError(
+                f"recommended angle should be compressed to 45 characters or less: {angle}"
+            )
+        banned = (
+            "用前后对比验证实际收益",
+            "拆解普通用户可复现的操作路径",
+            "拆解普通用户能复现的操作路径",
+            "核对限制后判断是否值得跟进",
+            "核对限制后再判断是否值得跟进",
+            "录屏复现核心功能",
+            "录屏测试真实效果",
+            "用真实任务测试效果",
+            "看看普通人能不能用",
+            "提升效率",
+            "值不值得使用",
+        )
+        if any(phrase in value for phrase in banned):
+            raise ValueError(f"generic recommended angle is not allowed: {angle}")
+        if re.search(r"(?:好用吗|值得用吗|能用吗)[？?。.]?$", value):
+            raise ValueError(
+                f"short generic product question is not a concrete angle: {angle}"
+            )
+
+        context = " ".join(
+            filter(
+                None,
+                [
+                    item.title,
+                    item.processing.analysis.summary
+                    if item.processing and item.processing.analysis
+                    else "",
+                    cls._artifact_block_content(item, "zh", "what_happened"),
+                    cls._artifact_block_content(item, "zh", "audience_problem"),
+                ],
+            )
+        )
+        ascii_anchors = {
+            token.lower()
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9.+-]{1,}", context)
+            if token.lower() not in {"ai", "the", "and", "with"}
+        }
+        chinese_spans = re.findall(r"[\u4e00-\u9fff]{2,}", context)
+        generic_ngrams = {
+            "普通", "用户", "使用", "功能", "工具", "内容", "视频", "实际",
+            "效果", "工作", "流程", "效率", "问题", "场景", "产品", "可以",
+            "如何", "什么", "需要", "适合", "进行", "一个",
+        }
+        chinese_anchors = {
+            span[index : index + size]
+            for span in chinese_spans
+            for size in (2, 3, 4)
+            for index in range(max(0, len(span) - size + 1))
+            if span[index : index + size] not in generic_ngrams
+        }
+        lowered = value.lower()
+        has_ascii_anchor = any(anchor in lowered for anchor in ascii_anchors)
+        has_chinese_anchor = any(
+            anchor in value for anchor in chinese_anchors
+        )
+        if not has_ascii_anchor and not has_chinese_anchor:
+            raise ValueError(
+                f"recommended angle lacks item-specific product, feature, or scenario: {angle}"
+            )
+        if has_ascii_anchor and not has_chinese_anchor:
+            raise ValueError(
+                "recommended angle names the product but lacks a concrete feature, "
+                f"problem, audience, or scenario: {angle}"
+            )
+        value_markers = (
+            "？", "?", "为什么", "到底", "能否", "是否", "怎么", "如何",
+            "省", "少做", "压缩", "只需", "不用", "不再", "避免", "告别",
+            "翻车", "限制", "误区", "错", "反而", "替代", "直接", "从零",
+            "差多少", "会不会", "适合谁", "不适合", "真能", "结果", "风险",
+        )
+        if not any(marker in value for marker in value_markers):
+            raise ValueError(
+                "recommended angle lacks a clear pain point, conflict, result, "
+                f"scenario, or viewpoint: {angle}"
+            )
 
     async def _enrich_item(self, item: ContentItem) -> None:
         if not item.processing or not item.processing.analysis:

@@ -107,6 +107,59 @@ def test_analyze_batch_concurrent_preserves_order(monkeypatch):
     assert [item.id for item in result] == [item.id for item in items]
 
 
+def test_analyze_batch_times_out_one_item_and_continues(monkeypatch):
+    client = SimpleNamespace(config=SimpleNamespace(request_timeout_sec=0.01))
+    analyzer = ContentAnalyzer(client, PROFILES)
+    items = [_make_item("rss:test:slow"), _make_item("rss:test:fast")]
+
+    async def fake_analyze_item(item):
+        if item.id.endswith("slow"):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(analyzer, "_analyze_item", fake_analyze_item)
+    result = asyncio.run(analyzer.analyze_batch(items))
+
+    assert len(result) == 2
+    assert result[0].processing is not None
+    assert result[0].processing.analysis.reason == "Analysis timed out"
+    assert result[1].processing is None
+
+
+def test_analyze_batch_writes_checkpoint_after_each_item(tmp_path):
+    client = SimpleNamespace(config=SimpleNamespace(request_timeout_sec=1))
+    analyzer = ContentAnalyzer(client, PROFILES)
+    items = [_make_item("rss:test:checkpoint")]
+    checkpoint = tmp_path / "analysis.json"
+
+    async def fake_analyze_item(item):
+        return None
+
+    analyzer._analyze_item = fake_analyze_item
+    asyncio.run(analyzer.analyze_batch(items, checkpoint_path=checkpoint))
+
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert payload[0]["id"] == "rss:test:checkpoint"
+
+
+def test_analyze_batch_retries_twice_then_keeps_success(monkeypatch):
+    client = SimpleNamespace(config=SimpleNamespace(request_timeout_sec=1))
+    analyzer = ContentAnalyzer(client, PROFILES)
+    item = _make_item("rss:test:retry")
+    attempts = 0
+
+    async def flaky(item):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("temporary model error")
+
+    monkeypatch.setattr(analyzer, "_analyze_item", flaky)
+    result = asyncio.run(analyzer.analyze_batch([item]))
+
+    assert attempts == 3
+    assert result[0].processing is None
+
+
 def test_analyze_item_accepts_valid_result():
     result = {
         "score": 8.5,

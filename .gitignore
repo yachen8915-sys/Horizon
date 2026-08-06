@@ -39,12 +39,19 @@ ENV/
 # Data files (keep structure, ignore content)
 data/config.json
 data/seen.json
+data/engagement_snapshots.json
 data/summaries/*.md
 data/subscribers.json
 data/mcp.secrets.json
 data/mcp-secrets.json
 data/mcp-runs/
 data/x_cookies_*.json
+# Local radar runs and machine-specific configuration
+data/aihot-stage2-*/
+data/formal-7d-*/
+data/config.pangmen-topic-radar.json
+.agents/
+scripts/run_aihot_stage2_test.py
 
 docs/_posts/*.md
 

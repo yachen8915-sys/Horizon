@@ -1,0 +1,26 @@
+{
+  "id": "pangmen-topic-radar",
+  "name": "Pangmen Content Topic Radar",
+  "display_names": {
+    "zh": "旁门左道PPT选题雷达"
+  },
+  "match": "match.md",
+  "analysis": "analysis.md",
+  "content": {
+    "analysis_max_chars": 4000,
+    "enrichment_max_chars": 8000,
+    "sampling": "head-middle-tail"
+  },
+  "enrichment": {
+    "prompt": "enrichment.md",
+    "blocks": [
+      {"id": "what_happened", "type": "section", "tools": [], "primary": true},
+      {"id": "audience_problem", "type": "section", "tools": []},
+      {"id": "recommended_angle", "type": "section", "tools": []},
+      {"id": "demo_or_case", "type": "section", "tools": []},
+      {"id": "content_format", "type": "section", "tools": []},
+      {"id": "priority_reason", "type": "section", "tools": []},
+      {"id": "verification", "type": "section", "tools": ["web_search"]}
+    ]
+  }
+}

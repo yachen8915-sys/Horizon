@@ -15,6 +15,7 @@ _ASCII = r"[A-Za-z0-9]"
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()<>#!|])")
 _MARKDOWN_BLOCK_START = re.compile(r"(?m)^( {0,3})(>|[-+] |\d+[.)] )")
 _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
+TOPIC_RADAR_PROFILE_ID = "pangmen-topic-radar"
 
 
 def _escape_markdown(value: object) -> str:
@@ -232,6 +233,51 @@ class DailySummarizer:
         if not items:
             return self._generate_empty_summary(date, total_fetched, labels)
 
+        view = self.build_view(items, language)
+        topic_card_mode = (
+            language == "zh"
+            and len(view.groups) == 1
+            and view.groups[0].profile_id == TOPIC_RADAR_PROFILE_ID
+        )
+        if topic_card_mode:
+            header = (
+                f"# 旁门左道PPT · 新媒体选题雷达 - {date}\n\n"
+                f"> 从 {total_fetched} 条资讯中筛选出 {len(items)} 个可做视频的选题。\n\n"
+                "---\n\n"
+            )
+            toc_entries = ["## 今日选题速览"]
+            body_sections = ["## 选题卡\n\n"]
+            for view_item in view.groups[0].items:
+                title = _pangu(_escape_markdown(view_item.title))
+                toc_entries.append(
+                    f"{view_item.index}. [{title}](#{view_item.anchor_id})"
+                )
+                if view_item.index == 1:
+                    body_sections.append("## 今日优先验证\n\n")
+                elif view_item.index == 6:
+                    body_sections.append("## 候选选题池\n\n")
+                elif view_item.index == 13:
+                    body_sections.append("## 趋势观察\n\n")
+                elif view_item.index == 18:
+                    body_sections.append("## 暂不采用\n\n")
+                body_sections.append(
+                    self._format_item(
+                        view_item.item,
+                        labels,
+                        language,
+                        view_item.index,
+                        heading_level=3,
+                        anchor_id=view_item.anchor_id,
+                        title_override=view_item.title,
+                        score_override=view_item.score,
+                        topic_card=True,
+                    )
+                )
+            return normalize_language(
+                header + "\n".join(toc_entries) + "\n\n---\n\n" + "".join(body_sections),
+                language,
+            )
+
         header = (
             f"# {labels['header']} - {date}\n\n"
             f"> {labels['selected_items'].format(total=total_fetched, selected=len(items))}\n\n"
@@ -240,7 +286,6 @@ class DailySummarizer:
 
         toc_sections = []
         body_sections = []
-        view = self.build_view(items, language)
         for group in view.groups:
             profile_name = _escape_markdown(group.name)
             if language == "zh":
@@ -356,8 +401,11 @@ class DailySummarizer:
         anchor_id: Optional[str] = None,
         title_override: Optional[str] = None,
         score_override: float | str | None = None,
+        topic_card: bool = False,
     ) -> str:
         """Format a single ContentItem into Markdown."""
+        if topic_card and language == "zh":
+            return self._format_compact_topic_card(item, index, anchor_id, title_override)
         artifact = item.processing.artifacts.get(language) if item.processing else None
         analysis = item.processing.analysis if item.processing else None
         _title = title_override or (artifact.title if artifact else item.title)
@@ -420,13 +468,28 @@ class DailySummarizer:
 
         lines = [
             f'<a id="{anchor_id or f"item-{index}"}"></a>',
-            f"{'#' * heading_level} {title_link} \u2b50\ufe0f {score}/10",  # ⭐️
+            f"{'#' * heading_level} {title if topic_card else title_link} \u2b50\ufe0f {score}/10",  # ⭐️
         ]
+        if topic_card:
+            raw_title = _escape_markdown(item.title)
+            if language == "zh":
+                raw_title = _pangu(raw_title)
+            original = f"[{raw_title}]({url})" if url else raw_title
+            lines.extend(["", f"**原始资讯**：{original}"])
         if summary.strip():
             lines.extend(["", summary])
         if primary_content.strip():
-            lines.extend(["", primary_content])
-        lines.extend(["", source_line])
+            if topic_card and primary_block:
+                primary_title = _escape_markdown(primary_block.title)
+                if language == "zh":
+                    primary_title = _pangu(primary_title)
+                lines.extend(["", f"**「{primary_title}」** {primary_content}"])
+            else:
+                lines.extend(["", primary_content])
+        if topic_card:
+            lines.extend(["", f"**来源与发布时间**：{source_line}"])
+        else:
+            lines.extend(["", source_line])
 
         if artifact:
             for block in artifact.blocks:
@@ -464,6 +527,48 @@ class DailySummarizer:
         lines.append("---")
 
         return "\n".join(lines) + "\n\n"
+
+    def _format_compact_topic_card(
+        self, item: ContentItem, index: int, anchor_id: Optional[str], title_override: Optional[str]
+    ) -> str:
+        """Render the short Pangmen card; ranking details stay outside the card."""
+        artifact = item.processing.artifacts.get("zh") if item.processing else None
+        blocks = {block.id: block for block in (artifact.blocks if artifact else [])}
+        def clean(value: object, limit: int = 170) -> str:
+            text = re.sub(r"\s+", " ", str(value or "")).strip()
+            return text if len(text) <= limit else text[:limit].rstrip("，。；、 ") + "……"
+        title = _pangu(_escape_markdown(title_override or (artifact.title if artifact else item.title)))
+        original_title = _escape_markdown(item.title)
+        original_url = _safe_url(item.metadata.get("original_url") or item.url)
+        aihot_url = _safe_url(item.metadata.get("aihot_url"))
+        source_name = item.metadata.get("feed_name") or item.author or "未知来源"
+        source_type = item.metadata.get("source_kind") or item.source_type.value
+        when = f"{item.published_at:%Y-%m-%d %H:%M UTC}" if item.published_at else "时间未知"
+        happened = clean(blocks.get("what_happened").content if blocks.get("what_happened") else item.content, 190)
+        audience = clean(blocks.get("audience_problem").content if blocks.get("audience_problem") else "适用人群和具体痛点待补充", 90)
+        angle_text = blocks.get("recommended_angle").content if blocks.get("recommended_angle") else ""
+        angles = []
+        for raw_angle in re.split(r"\r?\n+|[；;]+", str(angle_text)):
+            angle = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", raw_angle).strip()
+            if angle:
+                angles.append(clean(angle, 70))
+        angles = angles[:4]
+        tags = (item.processing.analysis.tags if item.processing and item.processing.analysis else [])[:5]
+        source_link = f"[{original_title}]({original_url})" if original_url else original_title
+        lines = [f'<a id="{anchor_id or f"item-{index}"}"></a>', f"### {title}", "", f"**原始资讯**：{source_name} · {source_type} · {when} · {source_link}"]
+        if aihot_url:
+            lines[-1] += f" · [AI HOT]({aihot_url})"
+        if item.metadata.get("engagement"):
+            metrics = item.metadata["engagement"]
+            shown = "、".join(f"{k}{v}" for k, v in metrics.items() if v is not None)
+            if shown:
+                lines.append(f"互动数据（实测）：{shown}")
+        lines += ["", f"**发生了什么**：{happened}", "", f"**适合谁、解决什么问题**：{audience}", "", "**推荐切入点**："]
+        lines.extend(f"- {angle}" for angle in angles)
+        if tags:
+            lines += ["", "**标签**：" + " ".join(f"#{_escape_markdown(tag)}" for tag in tags)]
+        lines += ["", "---", ""]
+        return "\n".join(lines)
 
     def _generate_empty_summary(self, date: str, total_fetched: int, labels: dict) -> str:
         """Generate summary when no high-scoring items were found."""

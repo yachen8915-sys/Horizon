@@ -1,12 +1,14 @@
 """Content analysis using AI."""
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
 from pydantic import ValidationError
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +16,12 @@ from .client import AIClient
 from .classifier import ContentClassifier
 from .prompting.analysis import analysis_system_prompt, analysis_user_prompt
 from .utils import parse_json_response
-from ..models import ContentAnalysis, ContentItem
+from ..models import ClassificationResult, ContentAnalysis, ContentItem, ProcessingResult
 from ..processing.content import select_content, split_content
 from ..processing.profiles import ProfileRegistry
 
 DEFAULT_THROTTLE_SEC = 0.0
+DEFAULT_REQUEST_TIMEOUT_SEC = 60.0
 
 class ContentAnalyzer:
     """Analyzes content items using AI to determine importance."""
@@ -54,23 +57,60 @@ class ContentAnalyzer:
         concurrency = getattr(config, "analysis_concurrency", 1)
         return max(concurrency, 1)
 
-    async def analyze_batch(self, items: List[ContentItem]) -> List[ContentItem]:
+    def _get_request_timeout_sec(self) -> float:
+        config = getattr(self.client, "config", None)
+        return max(float(getattr(config, "request_timeout_sec", DEFAULT_REQUEST_TIMEOUT_SEC)), 0.1)
+
+    @staticmethod
+    def _ensure_processing(item: ContentItem) -> None:
+        if item.processing is None:
+            profile = item.profile if isinstance(item.profile, str) and item.profile != "auto" else "unclassified"
+            item.processing = ProcessingResult(
+                classification=ClassificationResult(profile=profile, method="source_override")
+            )
+
+    async def analyze_batch(self, items: List[ContentItem], checkpoint_path: Optional[Path] = None) -> List[ContentItem]:
         throttle_sec = self._get_throttle_sec()
         concurrency = self._get_concurrency()
         semaphore = asyncio.Semaphore(concurrency)
+        timeout_sec = self._get_request_timeout_sec()
+        checkpoint_lock = asyncio.Lock()
+        completed = 0
+        failed = 0
 
         async def _process(item: ContentItem, index: int, progress_task) -> ContentItem:
+            nonlocal completed, failed
             async with semaphore:
+                if item.processing and item.processing.analysis and item.processing.analysis.score is not None:
+                    completed += 1
+                    if checkpoint_path:
+                        async with checkpoint_lock:
+                            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+                            checkpoint_path.write_text(json.dumps([entry.model_dump(mode="json") for entry in items], ensure_ascii=False, indent=2), encoding="utf-8")
+                    self.console.print(f"   Analyzing {index + 1}/{len(items)} · success {completed} · failed {failed} · resumed · {datetime.now(timezone.utc):%H:%M:%S} UTC")
+                    progress.advance(progress_task)
+                    return item
                 try:
-                    await self._analyze_item(item)
+                    await self._analyze_with_retries(item, timeout_sec)
+                    completed += 1
+                    status = "success"
+                except asyncio.TimeoutError:
+                    failed += 1
+                    self._ensure_processing(item)
+                    item.processing.analysis = ContentAnalysis(score=None, reason="Analysis timed out", summary=item.title)
+                    logger.error("Analysis timed out item=%s title=%r timeout=%.1fs", item.id, item.title, timeout_sec)
+                    status = "timeout"
                 except Exception as e:
-                    logger.error("Error analyzing item %s: %s", item.id, e)
-                    if item.processing:
-                        item.processing.analysis = ContentAnalysis(
-                            score=None,
-                            reason="Analysis failed",
-                            summary=item.title,
-                        )
+                    failed += 1
+                    logger.error("Error analyzing item=%s title=%r: %s", item.id, item.title, e)
+                    self._ensure_processing(item)
+                    item.processing.analysis = ContentAnalysis(score=None, reason="Analysis failed", summary=item.title)
+                    status = "failed"
+                if checkpoint_path:
+                    async with checkpoint_lock:
+                        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+                        checkpoint_path.write_text(json.dumps([entry.model_dump(mode="json") for entry in items], ensure_ascii=False, indent=2), encoding="utf-8")
+                self.console.print(f"   Analyzing {index + 1}/{len(items)} · success {completed} · failed {failed} · {status} · {datetime.now(timezone.utc):%H:%M:%S} UTC")
                 if throttle_sec > 0 and index < len(items) - 1:
                     await asyncio.sleep(throttle_sec)
             progress.advance(progress_task)
@@ -92,10 +132,20 @@ class ContentAnalyzer:
 
         return analyzed_items
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(min=2, max=10)
-    )
+    async def _analyze_with_retries(self, item: ContentItem, timeout_sec: float) -> None:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                await asyncio.wait_for(self._analyze_item(item), timeout=timeout_sec)
+                return
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+            if attempt < 2:
+                await asyncio.sleep(min(1.0 * (attempt + 1), 3.0))
+        raise last_error or RuntimeError("analysis failed after retries")
+
     async def _analyze_item(self, item: ContentItem) -> None:
         """Analyze a single content item.
 

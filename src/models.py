@@ -20,6 +20,8 @@ class SourceType(str, Enum):
     OSSINSIGHT = "ossinsight"
     GDELT = "gdelt"
     GOOGLE_NEWS = "google_news"
+    BILIBILI = "bilibili"
+    AIHOT = "aihot"
 
 
 class SourceDefinition(NamedTuple):
@@ -41,6 +43,8 @@ SOURCE_REGISTRY = {
     SourceType.OSSINSIGHT.value: SourceDefinition("ossinsight"),
     SourceType.GDELT.value: SourceDefinition("gdelt"),
     SourceType.GOOGLE_NEWS.value: SourceDefinition("google_news"),
+    SourceType.BILIBILI.value: SourceDefinition("bilibili", item_fields=("queries",)),
+    SourceType.AIHOT.value: SourceDefinition("aihot"),
 }
 
 ProfileRoute = Optional[Union[str, List[str]]]
@@ -195,6 +199,7 @@ class AIConfig(BaseModel):
     temperature: float = 0.3
     max_tokens: int = 4096
     throttle_sec: float = 0.0
+    request_timeout_sec: float = Field(default=60.0, ge=0.1)
     analysis_concurrency: int = 1
     enrichment_concurrency: int = 1
     languages: List[str] = Field(default_factory=lambda: ["en"])
@@ -436,6 +441,35 @@ class GoogleNewsConfig(BaseModel):
     profile: ProfileRoute = None
 
 
+class BilibiliQueryConfig(BaseModel):
+    query: str
+    author: Optional[str] = None
+    enabled: bool = True
+    fetch_limit: int = 20
+    category: Optional[str] = None
+    profile: ProfileRoute = None
+
+
+class BilibiliConfig(BaseModel):
+    enabled: bool = False
+    queries: List[BilibiliQueryConfig] = Field(default_factory=list)
+    request_interval_seconds: float = Field(default=1.5, ge=0)
+    retry_delay_seconds: float = Field(default=3.0, ge=0)
+
+
+class AIHotConfig(BaseModel):
+    """Anonymous, read-only AI HOT v1 supplement source."""
+
+    enabled: bool = False
+    fetch_24h: bool = True
+    fetch_7d: bool = True
+    fetch_hot_topics: bool = True
+    keywords: List[str] = Field(default_factory=list)
+    limit: int = Field(default=100, ge=1, le=100)
+    request_interval_seconds: float = Field(default=1.0, ge=0)
+    etag_file: str = "aihot_etags.json"
+
+
 class SourcesConfig(BaseModel):
     """All sources configuration."""
 
@@ -449,6 +483,8 @@ class SourcesConfig(BaseModel):
     ossinsight: OSSInsightConfig = Field(default_factory=OSSInsightConfig)
     gdelt: Optional[GDELTConfig] = None
     google_news: Optional[GoogleNewsConfig] = None
+    bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
+    aihot: AIHotConfig = Field(default_factory=AIHotConfig)
 
 
 class WebhookConfig(BaseModel):
@@ -570,12 +606,41 @@ class DisplayConfig(BaseModel):
     icon_style: Literal["emoji", "nerd", "ascii"] = "emoji"
 
 
+class EngagementThresholdConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    absolute: int = Field(ge=0)
+    relative: float = Field(ge=0)
+
+
+class EngagementTrackingConfig(BaseModel):
+    """One initial snapshot plus one refresh around 24 hours later."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    refresh_after_hours: int = Field(default=24, ge=1)
+    lookback_hours: int = Field(default=48, ge=24)
+    state_filename: str = "engagement_snapshots.json"
+    thresholds: Dict[str, EngagementThresholdConfig] = Field(default_factory=dict)
+
+    @field_validator("state_filename")
+    @classmethod
+    def validate_state_filename(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+            raise ValueError("state_filename must be a plain filename")
+        return value
+
+
 class CollectionConfig(BaseModel):
     """Controls which source items are fetched."""
 
     model_config = ConfigDict(extra="forbid")
 
     time_window_hours: int = 24
+    engagement_tracking: EngagementTrackingConfig = Field(
+        default_factory=EngagementTrackingConfig
+    )
 
 
 class DigestConfig(BaseModel):

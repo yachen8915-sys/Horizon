@@ -1,12 +1,17 @@
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from src.ai.enricher import ContentEnricher
+from src.ai.enricher import (
+    ContentEnricher,
+    RecommendedAngleAudit,
+    RecommendedAngleReviewResult,
+)
 from src.models import (
     ClassificationResult,
     ContentAnalysis,
@@ -526,3 +531,622 @@ def test_enrichment_batch_reports_failure_without_discarding_successes():
     assert result.succeeded_ids == [successful_item.id]
     assert result.failed_ids == [failed_item.id]
     assert result.failures[failed_item.id] == "RuntimeError: AI unavailable"
+
+
+def test_topic_radar_batch_reviews_and_repairs_generic_duplicate_angles():
+    first = make_item().model_copy(
+        update={
+            "id": "rss:test:workbuddy",
+            "title": "WorkBuddy 文件为什么写不进飞书",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    second = make_item().model_copy(
+        update={
+            "id": "rss:test:gemini-forms",
+            "title": "Gemini 在 Google Forms 里生成测验",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    for item in (first, second):
+        item.processing.classification.profile = "pangmen-topic-radar"
+        item.processing.artifacts["zh"] = ContentArtifact(
+            language="zh",
+            title=item.title,
+            blocks=[
+                ContentBlock(
+                    id="what_happened",
+                    type="section",
+                    title="发生了什么",
+                    content=item.title,
+                    primary=True,
+                ),
+                ContentBlock(
+                    id="audience_problem",
+                    type="section",
+                    title="适合谁、解决什么问题",
+                    content="适合需要处理重复任务的普通用户。",
+                ),
+                ContentBlock(
+                    id="recommended_angle",
+                    type="section",
+                    title="推荐切入点",
+                    content="用前后对比验证实际收益。",
+                ),
+            ],
+        )
+
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "item_id": first.id,
+                            "angles": [
+                                "同一份客户资料，手动录入与 WorkBuddy 写入飞书究竟差几步？",
+                                "WorkBuddy 已授权却仍写不进飞书，问题可能卡在哪一层？",
+                                "用前后对比验证实际收益。",
+                                "WorkBuddy 好用吗？",
+                            ],
+                        },
+                        {
+                            "item_id": second.id,
+                            "angles": [
+                                "教师拿同一份 PDF 出题，Gemini 能把半小时压缩到几分钟？",
+                                "Gemini 生成测验看似省事，答案准确率和题型限制会不会翻车？",
+                                "拆解普通用户能复现的操作路径。",
+                                "Gemini 好用吗？",
+                            ],
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps({"removals": []}, ensure_ascii=False),
+        ]
+    )
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=complete),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+
+    async def keep_existing_artifact(item):  # type: ignore[no-untyped-def]
+        return None
+
+    enricher._enrich_item = keep_existing_artifact  # type: ignore[method-assign]
+    result = asyncio.run(enricher.enrich_batch([first, second]))
+
+    assert result.status == "success"
+    assert len(requests) == 2
+    assert "跨选题" in requests[0]["system"]
+    assert "4-6 条候选" in requests[0]["system"]
+    assert "全量" in requests[1]["system"]
+    assert first.processing.artifacts["zh"].blocks[-1].content == (
+        "同一份客户资料，手动录入与 WorkBuddy 写入飞书究竟差几步？\n"
+        "WorkBuddy 已授权却仍写不进飞书，问题可能卡在哪一层？"
+    )
+    assert second.processing.artifacts["zh"].blocks[-1].content == (
+        "Gemini 生成测验看似省事，答案准确率和题型限制会不会翻车？"
+    )
+
+
+def test_topic_radar_angle_generation_is_chunked_before_global_audit():
+    items = []
+    for index in range(9):
+        item = make_item().model_copy(
+            update={
+                "id": f"rss:test:topic-{index}",
+                "title": f"工具{index}自动整理运营周报",
+                "profile": "pangmen-topic-radar",
+            }
+        )
+        item.processing.classification.profile = "pangmen-topic-radar"
+        item.processing.artifacts["zh"] = ContentArtifact(
+            language="zh",
+            title=item.title,
+            blocks=[
+                ContentBlock(
+                    id="what_happened",
+                    type="section",
+                    title="发生了什么",
+                    content=f"工具{index}新增了自动整理运营周报的功能。",
+                    primary=True,
+                ),
+                ContentBlock(
+                    id="audience_problem",
+                    type="section",
+                    title="适合谁、解决什么问题",
+                    content="适合每周需要汇总多张表格的运营人员。",
+                ),
+                ContentBlock(
+                    id="recommended_angle",
+                    type="section",
+                    title="推荐切入点",
+                    content="用前后对比验证实际收益。",
+                ),
+            ],
+        )
+        items.append(item)
+
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        if kwargs["system"].startswith("# 旁门左道PPT推荐切入点全量"):
+            return json.dumps({"removals": []}, ensure_ascii=False)
+        payload = json.loads(kwargs["user"].split("\n\n", 1)[1])
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "item_id": entry["item_id"],
+                        "angles": [
+                            f"{entry['topic_title']}后，运营每周少做哪些重复汇总步骤？",
+                            f"运营用{entry['topic_title']}汇总周报，最容易在哪个环节翻车？",
+                            f"{entry['topic_title']}真能替代复制表格吗？先看数据口径限制",
+                            f"{entry['topic_title']}适合多项目运营，还是会增加维护成本？",
+                        ],
+                    }
+                    for entry in payload
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=complete),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+
+    async def keep_existing_artifact(item):  # type: ignore[no-untyped-def]
+        return None
+
+    enricher._enrich_item = keep_existing_artifact  # type: ignore[method-assign]
+    result = asyncio.run(enricher.enrich_batch(items))
+
+    generation_requests = [
+        request
+        for request in requests
+        if not request["system"].startswith("# 旁门左道PPT推荐切入点全量")
+    ]
+    batch_sizes = [
+        len(json.loads(request["user"].split("\n\n", 1)[1]))
+        for request in generation_requests
+    ]
+    assert result.status == "success"
+    assert batch_sizes == [8, 1]
+    assert len(requests) == 3
+
+
+def test_invalid_topic_angle_is_repaired_as_one_item_instead_of_whole_chunk():
+    first = make_item().model_copy(
+        update={
+            "id": "rss:test:workbuddy-granular",
+            "title": "WorkBuddy 自动写入飞书客户资料",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    second = make_item().model_copy(
+        update={
+            "id": "rss:test:gemini-granular",
+            "title": "Gemini 根据 PDF 生成课堂测验",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    for item in (first, second):
+        item.processing.classification.profile = "pangmen-topic-radar"
+        item.processing.artifacts["zh"] = ContentArtifact(
+            language="zh",
+            title=item.title,
+            blocks=[
+                ContentBlock(
+                    id="what_happened",
+                    type="section",
+                    title="发生了什么",
+                    content=item.title,
+                    primary=True,
+                ),
+                ContentBlock(
+                    id="audience_problem",
+                    type="section",
+                    title="适合谁、解决什么问题",
+                    content="适合需要处理重复资料的职场人和教师。",
+                ),
+                ContentBlock(
+                    id="recommended_angle",
+                    type="section",
+                    title="推荐切入点",
+                    content="用前后对比验证实际收益。",
+                ),
+            ],
+        )
+
+    requests = []
+
+    def valid_angles(item_id):  # type: ignore[no-untyped-def]
+        if item_id == first.id:
+            return [
+                "同一份客户资料，WorkBuddy 自动写入飞书究竟能少做多少步骤？",
+                "WorkBuddy 已授权却写不进飞书，最容易卡在哪个权限环节？",
+                "销售每天录客户资料时，WorkBuddy 能否直接替代手动复制？",
+                "WorkBuddy 写入飞书失败时，哪些文件格式最容易翻车？",
+            ]
+        return [
+            "教师上传同一份 PDF，Gemini 生成的课堂测验能否直接使用？",
+            "Gemini 自动出题看似省事，答案准确率会不会让老师返工？",
+            "培训师用 Gemini 生成测验后，哪些题型仍然需要手动调整？",
+            "同一份课程资料，Gemini 出题能否替代教师逐题录入？",
+        ]
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        if kwargs["system"].startswith("# 旁门左道PPT推荐切入点全量"):
+            return json.dumps({"removals": []}, ensure_ascii=False)
+        item_ids = list(dict.fromkeys(re.findall(r'"item_id": "([^"]+)"', kwargs["user"])))
+        if len(requests) == 1:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "item_id": first.id,
+                            "angles": [
+                                "WorkBuddy 好用吗？",
+                                "用前后对比验证实际收益。",
+                                "录屏测试真实效果。",
+                                "看看普通人能不能用。",
+                            ],
+                        },
+                        {"item_id": second.id, "angles": valid_angles(second.id)},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "items": [
+                    {"item_id": item_id, "angles": valid_angles(item_id)}
+                    for item_id in item_ids
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=complete),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+
+    async def keep_existing_artifact(item):  # type: ignore[no-untyped-def]
+        return None
+
+    enricher._enrich_item = keep_existing_artifact  # type: ignore[method-assign]
+    result = asyncio.run(enricher.enrich_batch([first, second]))
+
+    regeneration_requests = [
+        request
+        for request in requests[1:]
+        if not request["system"].startswith("# 旁门左道PPT推荐切入点全量")
+    ]
+    regenerated_ids = list(
+        dict.fromkeys(re.findall(r'"item_id": "([^"]+)"', regeneration_requests[0]["user"]))
+    )
+    assert result.status == "success"
+    assert regenerated_ids == [first.id]
+    assert first.processing.artifacts["zh"].blocks[-1].content.startswith(
+        "同一份客户资料"
+    )
+
+
+def test_concrete_nineteen_character_topic_angle_is_valid():
+    item = make_item().model_copy(
+        update={
+            "id": "aihot:test:baidu-avatar",
+            "title": "百度搭子一句话生成数字人口播视频",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="百度搭子支持用一句话生成数字人口播视频。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="audience_problem",
+                type="section",
+                title="适合谁、解决什么问题",
+                content="适合不想露脸但需要制作口播视频的内容创作者。",
+            ),
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="不想露脸也能做口播？百度搭子一句话搞定",
+            ),
+        ],
+    )
+
+    ContentEnricher._validate_recommended_angle(
+        "不想露脸也能做口播？百度搭子一句话搞定",
+        item,
+    )
+
+
+def test_topic_angle_candidates_are_filtered_without_padding_to_four():
+    item = make_item().model_copy(
+        update={
+            "id": "aihot:test:baidu-avatar-filter",
+            "title": "百度搭子一句话生成数字人口播视频",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="百度搭子支持用一句话生成数字人口播视频。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="audience_problem",
+                type="section",
+                title="适合谁、解决什么问题",
+                content="适合不想露脸但需要制作口播视频的内容创作者。",
+            ),
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="旧切入点",
+            ),
+        ],
+    )
+    candidates = [
+        "不想露脸也能做口播？百度搭子一句话搞定",
+        "用前后对比验证实际收益。",
+        "百度搭子好用吗？",
+        "百度搭子生成数字人口播时，长文脚本会不会让口型和停顿翻车？",
+        "不想露脸也能做口播，百度搭子一句话就能搞定",
+        "百度搭子现在可以把一整篇特别特别长的脚本直接变成数字人口播视频并且还能自动处理所有复杂的镜头语言和后期包装问题",
+    ]
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=None),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+    filter_candidates = getattr(
+        enricher, "_filter_recommended_angle_candidates", None
+    )
+
+    assert callable(filter_candidates)
+    kept, rejected = filter_candidates(item, candidates)
+
+    assert kept == [
+        "不想露脸也能做口播？百度搭子一句话搞定",
+        "百度搭子生成数字人口播时，长文脚本会不会让口型和停顿翻车？",
+    ]
+    assert len(rejected) == 4
+
+
+def test_angle_audit_can_use_a_final_strict_json_retry():
+    responses = iter(
+        [
+            "",
+            "没有需要删除的切入点。",
+            json.dumps({"removals": []}, ensure_ascii=False),
+        ]
+    )
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=complete),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+
+    audit = asyncio.run(
+        enricher._complete_model(
+            RecommendedAngleAudit,
+            system="audit",
+            user="payload",
+            error_message="Invalid recommended angle audit",
+            max_attempts=3,
+            correction_instruction="只返回合法 JSON 对象。",
+        )
+    )
+
+    assert audit.removals == []
+    assert len(requests) == 3
+    assert "只返回合法 JSON 对象" in requests[-1]["user"]
+
+
+def test_specific_complete_angle_under_fourteen_chars_is_allowed():
+    item = make_item().model_copy(
+        update={
+            "id": "aihot:test:baidu-short",
+            "title": "百度搭子生成数字人口播",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="百度搭子支持生成数字人口播。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="audience_problem",
+                type="section",
+                title="适合谁、解决什么问题",
+                content="适合不想露脸的内容创作者。",
+            ),
+        ],
+    )
+
+    angle = "百度搭子口播会翻车吗？"
+    assert len(angle) < 14
+    ContentEnricher._validate_recommended_angle(angle, item)
+
+
+def test_single_topic_regeneration_gets_one_bounded_quality_retry():
+    item = make_item().model_copy(
+        update={
+            "id": "bilibili:video:cat-reminder",
+            "title": "用 AI 做一只能打人的猫，专治久坐",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="创作者用 AI 和硬件做出会拍打久坐用户的猫爪装置。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="audience_problem",
+                type="section",
+                title="适合谁、解决什么问题",
+                content="适合久坐办公且经常忘记起身的人。",
+            ),
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="旧切入点",
+            ),
+        ],
+    )
+    attempts = 0
+
+    async def request_candidates(items, language, failure_note=""):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return {
+                item.id: [
+                    "用前后对比验证实际收益。",
+                    "录屏测试真实效果。",
+                    "看看普通人能不能用。",
+                    "提升效率。",
+                ]
+            }
+        assert "上一轮" in failure_note
+        return {
+            item.id: [
+                "久坐提醒总被忽略，会打人的 AI 猫爪为何反而更有效？",
+                "办公室久坐人群被猫爪拍一下，能否真正打断忘我工作？",
+                "从屏幕弹窗到实体猫爪，AI 久坐提醒改变了什么流程？",
+                "AI 猫爪提醒久坐时，误触和打扰同事会不会翻车？",
+            ]
+        }
+
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=None),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+    enricher._request_angle_candidates = request_candidates  # type: ignore[method-assign]
+    result = RecommendedAngleReviewResult()
+
+    kept = asyncio.run(
+        enricher._regenerate_one_item_angles(
+            item,
+            "zh",
+            result,
+            "全量审计删除了全部候选。",
+        )
+    )
+
+    assert attempts == 2
+    assert len(kept) == 4
+    assert result.generated_count == 8
+
+
+def test_global_audit_rechecks_after_a_second_single_topic_regeneration():
+    item = make_item().model_copy(
+        update={
+            "id": "bilibili:video:repeat-audit",
+            "title": "AI 猫爪提醒久坐",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="AI 猫爪拍打久坐用户，能否真正打断忘我工作？",
+            )
+        ],
+    )
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=None),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+    audit_results = iter([True, True, False])
+    audit_calls = 0
+
+    async def keep_generated(items, language, result):
+        result.generated_count = 4
+
+    async def audit(items, language, result):
+        nonlocal audit_calls
+        audit_calls += 1
+        return next(audit_results)
+
+    enricher._generate_and_filter_angle_chunk = keep_generated  # type: ignore[method-assign]
+    enricher._audit_recommended_angles = audit  # type: ignore[method-assign]
+
+    result = asyncio.run(enricher.review_recommended_angles([item]))
+
+    assert audit_calls == 3
+    assert result.final_count == 1

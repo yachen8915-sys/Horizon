@@ -127,7 +127,7 @@ class AnthropicClient(AIClient):
 
         api_key = _resolve_api_key(config)
 
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": api_key, "timeout": config.request_timeout_sec}
         if config.base_url:
             kwargs["base_url"] = config.base_url
 
@@ -206,7 +206,7 @@ class OpenAIClient(AIClient):
         fallback = "no_key" if config.provider == AIProvider.OLLAMA else None
         api_key = _resolve_api_key(config, fallback=fallback)
 
-        kwargs = {"api_key": api_key}
+        kwargs = {"api_key": api_key, "timeout": config.request_timeout_sec}
         base_url = self._resolve_base_url(config)
         if base_url:
             kwargs["base_url"] = base_url
@@ -379,6 +379,7 @@ class AzureOpenAIClient(AIClient):
             api_key=api_key,
             azure_endpoint=azure_endpoint,
             api_version=config.api_version,
+            timeout=config.request_timeout_sec,
         )
         self.model = config.model
         self.temperature = config.temperature
@@ -658,6 +659,7 @@ def _create_chained_client(config: AIConfig) -> ChainedAIClient:
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             throttle_sec=config.throttle_sec,
+            request_timeout_sec=config.request_timeout_sec,
             analysis_concurrency=config.analysis_concurrency,
             enrichment_concurrency=config.enrichment_concurrency,
             languages=config.languages,
