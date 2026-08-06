@@ -1,22 +1,20 @@
 {
   "ai": {
     "provider": "deepseek",
-    "model": "deepseek-v4-flash",
-    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-chat",
     "api_key_env": "DEEPSEEK_API_KEY",
     "temperature": 0.3,
-    "max_tokens": 8192,
-    "throttle_sec": 1,
+    "max_tokens": 4096,
+    "throttle_sec": 0,
+    "analysis_concurrency": 1,
+    "enrichment_concurrency": 1,
     "languages": [
-      "zh",
-      "en"
-    ],
-    "analysis_concurrency": 5,
-    "enrichment_concurrency": 5
+      "zh"
+    ]
   },
   "processing": {
     "profiles_dir": "profiles",
-    "default_profile": "tech-news",
+    "default_profile": "pangmen-topic-radar",
     "profile_settings": {
       "tech-news": {
         "threshold": 7.0,
@@ -29,107 +27,258 @@
       "finance-news": {
         "threshold": 7.0,
         "topic_dedup": true
+      },
+      "pangmen-topic-radar": {
+        "threshold": 7.0,
+        "topic_dedup": true
       }
     }
   },
   "sources": {
-    "github": [
-      {
-        "type": "user_events",
-        "username": "karpathy",
-        "enabled": true,
-        "profile": "tech-news"
-      },
-      {
-        "type": "repo_releases",
-        "owner": "vllm-project",
-        "repo": "vllm",
-        "enabled": true,
-        "profile": "tech-news"
-      },
-      {
-        "type": "repo_releases",
-        "owner": "sgl-project",
-        "repo": "sglang",
-        "enabled": true,
-        "profile": "tech-news"
-      },
-      {
-        "type": "repo_releases",
-        "owner": "triton-lang",
-        "repo": "triton",
-        "enabled": true,
-        "profile": "tech-news"
-      }
-    ],
+    "github": [],
     "hackernews": {
       "enabled": true,
-      "fetch_top_stories": 30,
-      "min_score": 150,
-      "profile": "tech-news"
+      "fetch_top_stories": 50,
+      "min_score": 50,
+      "category": "community-trending",
+      "profile": "pangmen-topic-radar"
     },
     "rss": [
       {
+        "name": "OpenAI News",
+        "url": "https://openai.com/news/rss.xml",
+        "enabled": true,
+        "category": "official-ai-product",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Google AI and Product News",
+        "url": "https://blog.google/rss/",
+        "enabled": true,
+        "category": "official-ai-product",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Google Workspace Updates",
+        "url": "https://workspaceupdates.googleblog.com/feeds/posts/default?alt=rss",
+        "enabled": true,
+        "category": "office-ai-product",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Microsoft 365 Blog",
+        "url": "https://www.microsoft.com/en-us/microsoft-365/blog/feed/",
+        "enabled": true,
+        "category": "office-productivity",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Figma Release Notes",
+        "url": "https://www.figma.com/release-notes/feed/atom.xml",
+        "enabled": true,
+        "category": "design-product",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Notion What's New",
+        "url": "https://www.notion.com/releases/rss.xml",
+        "enabled": true,
+        "category": "office-productivity",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "GitHub Changelog",
+        "url": "https://github.blog/changelog/feed/",
+        "enabled": true,
+        "category": "ai-coding",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Claude Code Changelog",
+        "url": "https://code.claude.com/docs/en/changelog/rss.xml",
+        "enabled": true,
+        "category": "ai-coding",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "GitHub Releases - Dify",
+        "url": "https://github.com/langgenius/dify/releases.atom",
+        "enabled": true,
+        "category": "ai-agent",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "GitHub Releases - Cherry Studio",
+        "url": "https://github.com/CherryHQ/cherry-studio/releases.atom",
+        "enabled": true,
+        "category": "ai-productivity",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "GitHub Releases - Coze Studio",
+        "url": "https://github.com/coze-dev/coze-studio/releases.atom",
+        "enabled": true,
+        "category": "ai-agent",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "GitHub Releases - n8n",
+        "url": "https://github.com/n8n-io/n8n/releases.atom",
+        "enabled": true,
+        "category": "workflow-automation",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "One Useful Thing - Ethan Mollick",
+        "url": "https://www.oneusefulthing.org/feed",
+        "enabled": true,
+        "category": "overseas-ai-creator",
+        "profile": "pangmen-topic-radar"
+      },
+      {
         "name": "Simon Willison",
-        "url": "https://simonwillison.net/atom/everything/",
+        "url": "https://simonwillison.net/atom/everything-but-beats/",
         "enabled": true,
-        "category": "ai-tools",
-        "profile": "tech-news"
+        "category": "overseas-ai-creator",
+        "profile": "pangmen-topic-radar"
       },
       {
-        "name": "CNBC Finance",
-        "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "name": "Ben's Bites",
+        "url": "https://www.bensbites.com/feed",
         "enabled": true,
-        "category": "finance",
-        "profile": "finance-news",
-        "content_extractor": "trafilatura"
+        "category": "overseas-ai-creator",
+        "profile": "pangmen-topic-radar"
       },
       {
-        "name": "GitHub Trending - Daily",
-        "url": "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
+        "name": "Latent Space",
+        "url": "https://www.latent.space/feed",
         "enabled": true,
-        "category": "github-trending",
-        "profile": "tech-news"
+        "category": "overseas-ai-creator",
+        "profile": "pangmen-topic-radar"
       },
       {
-        "name": "Semianalysis",
-        "url": "https://newsletter.semianalysis.com/feed",
+        "name": "Interconnects - Nathan Lambert",
+        "url": "https://www.interconnects.ai/feed",
         "enabled": true,
-        "category": "semiconductors",
-        "profile": "tech-news"
+        "category": "overseas-ai-creator",
+        "profile": "pangmen-topic-radar"
       },
       {
-        "name": "LWN.net",
-        "url": "https://lwn.net/headlines/full_text?key=${LWN_KEY}",
+        "name": "YouTube - Matt Wolfe",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChpleBmo18P08aKCIgti38g",
         "enabled": true,
-        "category": "linux-kernel",
-        "profile": "tech-news"
+        "category": "overseas-ai-video",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "YouTube - Jeff Su",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwAnu01qlnVg1Ai2AbtTMaA",
+        "enabled": true,
+        "category": "overseas-ai-video",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "YouTube - Andrej Karpathy",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+        "enabled": true,
+        "category": "overseas-ai-video",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "YouTube - AI Explained",
+        "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNJ1Ymd5yFuUPtn21xtRbbw",
+        "enabled": true,
+        "category": "overseas-ai-video",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Google News - Domestic AI Creators",
+        "url": "https://news.google.com/rss/search?q=%28%22%E6%95%B0%E5%AD%97%E7%94%9F%E5%91%BD%E5%8D%A1%E5%85%B9%E5%85%8B%22+OR+%22%E5%AE%9D%E7%8E%89%22+OR+%22%E6%AD%B8%E8%97%8F%22+OR+%22%E7%A8%8B%E5%BA%8F%E5%91%98%E5%B0%8F%E7%81%B0%22+OR+%22AI%E5%B0%91%E5%B9%B4%22+OR+%22%E5%AE%9E%E8%B7%B5%E5%93%A5MinLi%22+OR+%22AI%E7%A3%8A%E5%8F%94%22+OR+%22RunSen+Xu%22+OR+%22%E9%98%BF%E5%85%B0AI%22+OR+%22%E7%8E%8B%E5%BE%B7%E7%A6%8F%22+OR+%22%E7%A7%8B%E8%8A%9D2046%22%29+AI&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+        "enabled": true,
+        "category": "domestic-ai-creator-index",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Google News - Unfed Official and Overseas Sources",
+        "url": "https://news.google.com/rss/search?q=%28site%3Aanthropic.com%2Fnews+OR+site%3Ablog.adobe.com+OR+site%3Acanva.com%2Fnewsroom+OR+site%3Acursor.com%2Fchangelog+OR+site%3Atherundown.ai+OR+site%3Afuturetools.io%29+AI&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+        "enabled": true,
+        "category": "official-and-overseas-index",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Product Hunt",
+        "url": "https://www.producthunt.com/feed",
+        "enabled": true,
+        "category": "new-ai-products",
+        "profile": "pangmen-topic-radar"
       }
     ],
     "reddit": {
-      "enabled": true,
-      "subreddits": [
+      "enabled": false,
+      "subreddits": [],
+      "users": [],
+      "fetch_comments": 0
+    },
+    "twitter": {
+      "enabled": false,
+      "users": [
+        "karpathy",
+        "ylecun"
+      ],
+      "fetch_limit": 10,
+      "fetch_reply_text": false,
+      "max_replies_per_tweet": 3,
+      "max_tweets_to_expand": 10,
+      "reply_min_likes": 5,
+      "profile": "tech-news"
+    },
+    "openbb": {
+      "enabled": false,
+      "fetch_filings": false,
+      "filings_provider": "sec",
+      "watchlists": [
         {
-          "subreddit": "MachineLearning",
+          "name": "megacaps",
           "enabled": true,
-          "sort": "hot",
-          "time_filter": "day",
-          "fetch_limit": 10,
-          "min_score": 60,
-          "profile": "tech-news"
-        },
-        {
-          "subreddit": "LocalLLaMA",
-          "enabled": true,
-          "sort": "hot",
-          "time_filter": "day",
-          "fetch_limit": 10,
-          "min_score": 60,
+          "provider": "yfinance",
+          "fetch_limit": 20,
+          "category": "equities",
+          "symbols": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "GOOGL",
+            "AMZN",
+            "META",
+            "TSLA"
+          ],
           "profile": "tech-news"
         }
+      ]
+    },
+    "ossinsight": {
+      "enabled": true,
+      "period": "past_24_hours",
+      "languages": [
+        "All",
+        "Python",
+        "TypeScript"
       ],
-      "users": [],
-      "fetch_comments": 10
+      "keywords": [
+        "ai",
+        "agent",
+        "llm",
+        "video",
+        "image",
+        "presentation",
+        "office",
+        "productivity",
+        "coding"
+      ],
+      "min_stars": 1,
+      "max_items": 20,
+      "category": "oss-trending",
+      "profile": "pangmen-topic-radar"
     },
     "telegram": {
       "enabled": true,
@@ -137,18 +286,186 @@
         {
           "channel": "zaihuapd",
           "enabled": true,
-          "fetch_limit": 20,
-          "profile": ["tech-news", "finance-news"]
+          "fetch_limit": 10,
+          "category": "ai-product-updates",
+          "profile": "pangmen-topic-radar"
         }
       ]
+    },
+    "gdelt": {
+      "enabled": false,
+      "query": "artificial intelligence",
+      "mode": "ArtList",
+      "max_records": 75,
+      "timespan": null,
+      "language": null,
+      "country": null,
+      "category": "news",
+      "profile": "tech-news"
+    },
+    "google_news": {
+      "enabled": true,
+      "query": "(豆包 OR 通义千问 OR Qwen OR Kimi OR 智谱清言 OR GLM OR 腾讯元宝 OR 文心一言 OR ERNIE OR 夸克AI OR 飞书AI OR WPS AI OR 钉钉AI OR 腾讯文档AI OR WorkBuddy OR 扣子 OR Coze OR TRAE OR Qoder OR 通义灵码 OR 文心快码 OR CodeBuddy OR Dify OR Cherry Studio OR 即梦AI OR 可灵AI OR 通义万相 OR 剪映AI OR 海螺AI OR MiniMax OR Anthropic OR Claude OR Adobe OR Canva OR Cursor) (新功能 OR 更新 OR 发布 OR 实测 OR 教程 OR 争议)",
+      "language": "zh-CN",
+      "country": "CN",
+      "ceid": "CN:zh-Hans",
+      "max_results": 100,
+      "category": "ai-product-and-user-feedback",
+      "profile": "pangmen-topic-radar"
+    },
+    "bilibili": {
+      "enabled": true,
+      "request_interval_seconds": 2.0,
+      "retry_delay_seconds": 5.0,
+      "queries": [
+        {
+          "query": "数字生命卡兹克",
+          "author": "数字生命卡兹克",
+          "fetch_limit": 10,
+          "category": "domestic-ai-creator",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "歸藏的AI工具箱",
+          "author": "歸藏的AI工具箱",
+          "fetch_limit": 10,
+          "category": "domestic-ai-creator",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "我是程序员小灰",
+          "author": "我是程序员小灰",
+          "fetch_limit": 10,
+          "category": "domestic-ai-creator",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "AI磊叔",
+          "author": "AI磊叔",
+          "fetch_limit": 10,
+          "category": "domestic-ai-creator",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "秋芝2046",
+          "author": "秋芝2046",
+          "fetch_limit": 10,
+          "category": "domestic-ai-creator",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "飞书AI",
+          "fetch_limit": 5,
+          "category": "ai-office-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "WPS AI",
+          "fetch_limit": 5,
+          "category": "ai-office-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "Kimi AI",
+          "fetch_limit": 5,
+          "category": "ai-product-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "豆包 AI",
+          "fetch_limit": 5,
+          "category": "ai-product-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "TRAE AI编程",
+          "fetch_limit": 5,
+          "category": "ai-coding-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "即梦AI",
+          "fetch_limit": 5,
+          "category": "ai-creative-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "可灵AI",
+          "fetch_limit": 5,
+          "category": "ai-creative-demo",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "剪映AI",
+          "fetch_limit": 5,
+          "category": "ai-creative-demo",
+          "profile": "pangmen-topic-radar"
+        }
+      ]
+    },
+    "aihot": {
+      "enabled": true,
+      "fetch_24h": true,
+      "fetch_7d": true,
+      "fetch_hot_topics": true,
+      "keywords": [
+        "OpenAI",
+        "Claude Code",
+        "Gemini",
+        "飞书",
+        "WPS",
+        "AI PPT",
+        "工作流",
+        "视频生成"
+      ],
+      "limit": 100,
+      "request_interval_seconds": 1.0,
+      "etag_file": "aihot_etags.json"
     }
   },
   "collection": {
-    "time_window_hours": 24
+    "time_window_hours": 24,
+    "engagement_tracking": {
+      "enabled": true,
+      "refresh_after_hours": 24,
+      "lookback_hours": 48,
+      "state_filename": "engagement_snapshots.json",
+      "thresholds": {
+        "views": {
+          "absolute": 5000,
+          "relative": 0.5
+        },
+        "likes": {
+          "absolute": 200,
+          "relative": 0.5
+        },
+        "comments": {
+          "absolute": 50,
+          "relative": 0.5
+        },
+        "shares": {
+          "absolute": 50,
+          "relative": 0.5
+        },
+        "favorites": {
+          "absolute": 200,
+          "relative": 0.5
+        },
+        "points": {
+          "absolute": 100,
+          "relative": 0.5
+        },
+        "stars": {
+          "absolute": 100,
+          "relative": 0.25
+        }
+      }
+    }
   },
   "digest": {
     "max_items": null,
     "profile_order": [
+      "pangmen-topic-radar",
       "tech-news",
       "tech-blog",
       "finance-news"
@@ -193,5 +510,8 @@
       }
     },
     "headers": ""
+  },
+  "display": {
+    "icon_style": "emoji"
   }
 }
