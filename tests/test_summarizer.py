@@ -192,6 +192,64 @@ def test_generate_summary_renders_topic_radar_as_chinese_topic_cards():
     assert "待核实信息" not in result
 
 
+def test_generate_webhook_item_hides_internal_topic_radar_fields():
+    item = _make_item(1)
+    item.profile = "pangmen-topic-radar"
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title="用 AI 改造汇报流程",
+        blocks=[
+            ContentBlock(
+                id="what_happened",
+                type="section",
+                title="发生了什么",
+                content="工具新增了可复用的汇报自动化流程。",
+                primary=True,
+            ),
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="把一小时周报压缩成十分钟。",
+            ),
+            ContentBlock(
+                id="demo_or_case",
+                type="section",
+                title="演示或案例建议",
+                content="录屏展示导入素材到生成大纲。",
+            ),
+            ContentBlock(
+                id="content_format",
+                type="section",
+                title="推荐内容形式",
+                content="录屏教程。",
+            ),
+            ContentBlock(
+                id="priority_reason",
+                type="section",
+                title="优先级及理由",
+                content="P0：痛点明确且可演示。",
+            ),
+            ContentBlock(
+                id="verification",
+                type="section",
+                title="待核实信息",
+                content="确认免费额度和地区限制。",
+            ),
+        ],
+    )
+
+    result = DailySummarizer().generate_webhook_item(
+        item, language="zh", index=1, total=1
+    )
+
+    assert "演示或案例建议" in result
+    assert "推荐内容形式" not in result
+    assert "优先级及理由" not in result
+    assert "待核实信息" not in result
+
+
 def test_topic_radar_summary_does_not_pad_recommended_angles_with_generic_fallbacks():
     item = _make_item(1)
     item.profile = "pangmen-topic-radar"

@@ -16,6 +16,9 @@ _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()<>#!|])")
 _MARKDOWN_BLOCK_START = re.compile(r"(?m)^( {0,3})(>|[-+] |\d+[.)] )")
 _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
 TOPIC_RADAR_PROFILE_ID = "pangmen-topic-radar"
+TOPIC_RADAR_HIDDEN_BLOCK_IDS = frozenset(
+    {"content_format", "priority_reason", "verification"}
+)
 
 
 def _escape_markdown(value: object) -> str:
@@ -408,6 +411,13 @@ class DailySummarizer:
             return self._format_compact_topic_card(item, index, anchor_id, title_override)
         artifact = item.processing.artifacts.get(language) if item.processing else None
         analysis = item.processing.analysis if item.processing else None
+        is_topic_radar = (
+            item.profile == TOPIC_RADAR_PROFILE_ID
+            or (
+                item.processing is not None
+                and item.processing.classification.profile == TOPIC_RADAR_PROFILE_ID
+            )
+        )
         _title = title_override or (artifact.title if artifact else item.title)
         title = _escape_markdown(_title)
         raw_url = str(item.url)
@@ -494,6 +504,8 @@ class DailySummarizer:
         if artifact:
             for block in artifact.blocks:
                 if block.primary:
+                    continue
+                if is_topic_radar and block.id in TOPIC_RADAR_HIDDEN_BLOCK_IDS:
                     continue
                 block_title = _escape_markdown(block.title)
                 block_content = _escape_markdown(block.content)
