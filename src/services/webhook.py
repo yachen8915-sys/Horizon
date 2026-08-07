@@ -347,12 +347,36 @@ class WebhookNotifier:
         layout = getattr(self.config, "layout", "markdown")
         return _is_feishu_platform(platform) and layout == "collapsible"
 
+    @staticmethod
+    def _is_topic_radar_digest(items: List[ContentItem]) -> bool:
+        """Return whether every item belongs to the Pangmen topic radar."""
+        if not items:
+            return False
+        return all(
+            (
+                item.processing.classification.profile
+                if item.processing
+                else item.profile
+            )
+            == "pangmen-topic-radar"
+            for item in items
+        )
+
+    @staticmethod
+    def _feishu_collapsible_title(date: str, lang: str, topic_radar: bool) -> str:
+        if lang == "zh" and topic_radar:
+            return f"旁门AI {date} 折叠日报"
+        if lang == "zh":
+            return f"Horizon {date} 折叠日报"
+        return f"Horizon {date} Collapsible Daily"
+
     def _build_feishu_collapsible_overview(
         self,
         item_count: int,
         all_items_count: int,
         date: str,
         lang: str,
+        topic_radar: bool = False,
     ) -> str:
         """Build a non-redundant overview for a card that already lists item panels."""
         if lang == "zh":
@@ -361,6 +385,8 @@ class WebhookNotifier:
                     f"# Horizon 每日速递 - {date}\n\n"
                     f"> 已分析 {all_items_count} 条内容，暂无达到重要性阈值的资讯。"
                 )
+            if topic_radar:
+                return f"> 从 {all_items_count} 条内容中筛选出 {item_count} 条重要资讯。"
             return (
                 f"# Horizon 每日速递 - {date}\n\n"
                 f"> 从 {all_items_count} 条内容中筛选出 {item_count} 条重要资讯。\n\n"
@@ -386,6 +412,7 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        topic_radar: bool,
     ) -> dict[str, Any]:
         """Build a single Feishu Card JSON 2.0 message with collapsed item details."""
         overview = self._build_feishu_collapsible_overview(
@@ -393,12 +420,16 @@ class WebhookNotifier:
             all_items_count=all_items_count,
             date=date,
             lang=lang,
+            topic_radar=topic_radar,
         )
         elements: list[dict[str, Any]] = [_markdown(overview)]
 
         view = summarizer.build_view(important_items, lang)
         for group in view.groups:
-            elements.append(_markdown(f"## {group.name}"))
+            if topic_radar:
+                elements.append(_markdown("点击下方面板即可展开阅读全文"))
+            else:
+                elements.append(_markdown(f"## {group.name}"))
             for view_item in group.items:
                 score_suffix = (
                     f" ⭐️ {view_item.score}/10"
@@ -432,10 +463,8 @@ class WebhookNotifier:
                 "header": {
                     "title": {
                         "tag": "plain_text",
-                        "content": (
-                            f"Horizon {date} 折叠日报"
-                            if lang == "zh"
-                            else f"Horizon {date} Collapsible Daily"
+                        "content": self._feishu_collapsible_title(
+                            date, lang, topic_radar
                         ),
                     },
                     "template": "blue",
@@ -479,13 +508,12 @@ class WebhookNotifier:
         }
 
         if self._can_use_feishu_collapsible():
+            topic_radar = self._is_topic_radar_digest(important_items)
             return [
                 {
                     **base_vars,
-                    "message_title": (
-                        f"Horizon {date} 折叠日报"
-                        if lang == "zh"
-                        else f"Horizon {date} Collapsible Daily"
+                    "message_title": self._feishu_collapsible_title(
+                        date, lang, topic_radar
                     ),
                     "message_kind": "collapsible",
                     "summary": self._build_feishu_collapsible_overview(
@@ -493,6 +521,7 @@ class WebhookNotifier:
                         all_items_count=all_items_count,
                         date=date,
                         lang=lang,
+                        topic_radar=topic_radar,
                     ),
                     "_request_body_override": self._build_feishu_collapsible_body(
                         important_items=important_items,
@@ -500,6 +529,7 @@ class WebhookNotifier:
                         date=date,
                         lang=lang,
                         summarizer=summarizer,
+                        topic_radar=topic_radar,
                     ),
                 }
             ]

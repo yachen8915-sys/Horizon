@@ -1061,6 +1061,46 @@ class TestSendDailySummary:
         assert panels[1]["header"]["title"]["content"].startswith("2. Item B")
         del os.environ[_TEST_URL_ENV]
 
+    def test_feishu_collapsible_topic_radar_uses_compact_chinese_header(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(
+            enabled=True,
+            url_env=_TEST_URL_ENV,
+            platform="feishu",
+            layout="collapsible",
+        )
+        notifier = WebhookNotifier(config)
+        item = _make_item(title="AI 动画工作流")
+        item.profile = "pangmen-topic-radar"
+        item.processing.classification.profile = "pangmen-topic-radar"
+        summarizer = DailySummarizer(
+            profile_names={
+                "pangmen-topic-radar": {"zh": "旁门左道PPT选题雷达"}
+            }
+        )
+
+        message = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=[item],
+            all_items_count=20,
+            date="2026-08-07",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+
+        assert message["message_title"] == "旁门AI 2026-08-07 折叠日报"
+        elements = message["_request_body_override"]["card"]["body"]["elements"]
+        markdown_blocks = [
+            element["content"] for element in elements if element["tag"] == "markdown"
+        ]
+        assert markdown_blocks == [
+            "> 从 20 条内容中筛选出 1 条重要资讯。",
+            "点击下方面板即可展开阅读全文",
+        ]
+        assert all("Horizon 每日速递" not in block for block in markdown_blocks)
+        assert all("旁门左道PPT选题雷达" not in block for block in markdown_blocks)
+        del os.environ[_TEST_URL_ENV]
+
     def test_feishu_collapsible_groups_profiles_and_resets_numbering(self):
         os.environ[_TEST_URL_ENV] = _TEST_URL
         config = WebhookConfig(
