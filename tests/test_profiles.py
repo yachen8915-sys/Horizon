@@ -125,6 +125,17 @@ def test_pangmen_profile_accepts_user_facing_access_changes_but_not_parameter_on
     assert "纯参数" in profile.analysis_prompt
 
 
+def test_pangmen_profile_does_not_request_demo_or_case_block():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-topic-radar")
+
+    assert "demo_or_case" not in {
+        block.id for block in profile.definition.enrichment.blocks
+    }
+    assert "演示或案例建议" not in profile.enrichment_prompt
+
+
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):
     profile_dir = tmp_path / "invalid"
     profile_dir.mkdir()

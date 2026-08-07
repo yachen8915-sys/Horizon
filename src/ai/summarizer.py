@@ -17,7 +17,7 @@ _MARKDOWN_BLOCK_START = re.compile(r"(?m)^( {0,3})(>|[-+] |\d+[.)] )")
 _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
 TOPIC_RADAR_PROFILE_ID = "pangmen-topic-radar"
 TOPIC_RADAR_HIDDEN_BLOCK_IDS = frozenset(
-    {"content_format", "priority_reason", "verification"}
+    {"content_format", "demo_or_case", "priority_reason", "verification"}
 )
 
 

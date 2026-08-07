@@ -244,7 +244,7 @@ def test_generate_webhook_item_hides_internal_topic_radar_fields():
         item, language="zh", index=1, total=1
     )
 
-    assert "演示或案例建议" in result
+    assert "演示或案例建议" not in result
     assert "推荐内容形式" not in result
     assert "优先级及理由" not in result
     assert "待核实信息" not in result

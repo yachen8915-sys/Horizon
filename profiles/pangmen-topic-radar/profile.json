@@ -17,7 +17,6 @@
       {"id": "what_happened", "type": "section", "tools": [], "primary": true},
       {"id": "audience_problem", "type": "section", "tools": []},
       {"id": "recommended_angle", "type": "section", "tools": []},
-      {"id": "demo_or_case", "type": "section", "tools": []},
       {"id": "content_format", "type": "section", "tools": []},
       {"id": "priority_reason", "type": "section", "tools": []},
       {"id": "verification", "type": "section", "tools": ["web_search"]}
