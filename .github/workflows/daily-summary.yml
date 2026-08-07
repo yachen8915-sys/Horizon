@@ -4,7 +4,16 @@ on:
   schedule:
     # GitHub scheduled workflows use UTC. 01:30 UTC is 09:30 Asia/Shanghai.
     - cron: '30 1 * * *'
-  workflow_dispatch:      # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "运行完整日报，或仅发送飞书连通性测试卡"
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - webhook_test
 
 jobs:
   daily-summary:
@@ -33,6 +42,7 @@ jobs:
         run: cp data/config.github.json data/config.json
 
       - name: Run Horizon
+        if: inputs.run_mode != 'webhook_test'
         env:
           # Map secrets to environment variables expected by config.json
           # Modify these based on your data/config.github.json provider settings
@@ -43,6 +53,12 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
         run: uv run horizon --hours 24
+
+      - name: Send webhook connectivity test
+        if: inputs.run_mode == 'webhook_test'
+        env:
+          HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
+        run: uv run horizon-webhook --config data/config.github.json --lang zh
 
       - name: Upload selection diagnostics
         if: always()

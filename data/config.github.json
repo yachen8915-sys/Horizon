@@ -6,7 +6,8 @@
     "temperature": 0.3,
     "max_tokens": 4096,
     "throttle_sec": 0,
-    "analysis_concurrency": 1,
+    "request_timeout_sec": 25,
+    "analysis_concurrency": 2,
     "enrichment_concurrency": 1,
     "languages": [
       "zh"
