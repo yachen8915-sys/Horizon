@@ -167,6 +167,46 @@ def test_profile_without_threshold_bypasses_score_filter() -> None:
     assert orchestrator.passes_profile_filter(make_item("item", 1.0, "ai"))
 
 
+def test_selection_diagnostics_records_why_analyzed_items_were_excluded() -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    selected = make_item("selected", 8.0, "ai")
+    below_threshold = make_item("below-threshold", 6.5, "ai")
+    deduplicated = make_item("deduplicated", 8.0, "ai")
+
+    diagnostics = orchestrator.build_selection_diagnostics(
+        [selected, below_threshold, deduplicated],
+        [selected],
+    )
+
+    assert diagnostics["analyzed_count"] == 3
+    assert diagnostics["selected_count"] == 1
+    assert diagnostics["rejected_count"] == 2
+    assert diagnostics["items"] == [
+        {
+            "id": "below-threshold",
+            "title": "below-threshold",
+            "profile": "tech-news",
+            "source_type": "rss",
+            "category": "ai",
+            "score": 6.5,
+            "threshold": 7.0,
+            "stage": "below_profile_threshold",
+            "analysis_reason": "test",
+        },
+        {
+            "id": "deduplicated",
+            "title": "deduplicated",
+            "profile": "tech-news",
+            "source_type": "rss",
+            "category": "ai",
+            "score": 8.0,
+            "threshold": 7.0,
+            "stage": "removed_after_threshold",
+            "analysis_reason": "test",
+        },
+    ]
+
+
 def test_rejects_settings_for_unknown_profile() -> None:
     config = Config(
         ai=AIConfig(

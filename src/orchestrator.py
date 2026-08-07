@@ -288,6 +288,14 @@ class HorizonOrchestrator:
                 analyzed_items,
             )
             important_items = filtering_result.items
+            diagnostics = self.build_selection_diagnostics(
+                analyzed_items,
+                important_items,
+            )
+            diagnostics_path = self._save_selection_diagnostics(diagnostics)
+            self.console.print(
+                f"   Saved selection diagnostics: {diagnostics_path}"
+            )
 
             # Show per-sub-source selection breakdown
             selected_counts: Dict[str, int] = defaultdict(int)
@@ -868,6 +876,78 @@ class HorizonOrchestrator:
             balanced_digest=balanced,
             eligible_count=len(eligible),
         )
+
+    def build_selection_diagnostics(
+        self,
+        analyzed_items: List[ContentItem],
+        selected_items: List[ContentItem],
+        threshold: Optional[float] = None,
+    ) -> dict:
+        """Return a compact, non-sensitive record for items excluded from a digest.
+
+        Items below their profile threshold receive an exact exclusion reason.
+        Items that pass the threshold but are absent from the final digest were
+        removed by semantic deduplication, a post-analysis filter, or a digest
+        limit, so the record deliberately keeps that stage broad instead of
+        inventing a more specific reason.
+        """
+        selected_ids = {item.id for item in selected_items}
+        rejected = []
+        for item in analyzed_items:
+            if item.id in selected_ids:
+                continue
+
+            analysis = item.processing.analysis if item.processing else None
+            profile_id = (
+                item.processing.classification.profile
+                if item.processing
+                else item.profile or self.profiles.default_profile
+            )
+            settings = self.config.processing.profile_settings.get(profile_id)
+            effective_threshold = threshold
+            if effective_threshold is None and settings is not None:
+                effective_threshold = settings.threshold
+            rejected.append(
+                {
+                    "id": item.id,
+                    "title": item.title,
+                    "profile": profile_id,
+                    "source_type": item.source_type.value,
+                    "category": item.metadata.get("category"),
+                    "score": analysis.score if analysis else None,
+                    "threshold": effective_threshold,
+                    "stage": (
+                        "below_profile_threshold"
+                        if not self.passes_profile_filter(item, threshold)
+                        else "removed_after_threshold"
+                    ),
+                    "analysis_reason": analysis.reason if analysis else None,
+                }
+            )
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "analyzed_count": len(analyzed_items),
+            "selected_count": len(selected_items),
+            "rejected_count": len(rejected),
+            "items": rejected,
+        }
+
+    @staticmethod
+    def _save_selection_diagnostics(diagnostics: dict) -> Path:
+        """Persist selection diagnostics for the current run without touching summaries."""
+        diagnostics_dir = Path("data") / "diagnostics"
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = safe_output_path(
+            diagnostics_dir,
+            f"selection-{timestamp}.json",
+        )
+        path.write_text(
+            json.dumps(diagnostics, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return path
 
     def passes_profile_filter(
         self,

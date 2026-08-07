@@ -15,7 +15,13 @@ def test_loads_builtin_profiles():
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
     )
 
-    for profile_id in ("tech-news", "tech-blog", "finance-news", "pangmen-topic-radar"):
+    for profile_id in (
+        "tech-news",
+        "tech-blog",
+        "finance-news",
+        "pangmen-topic-radar",
+        "mining-market-radar",
+    ):
         profile = registry.get(profile_id)
         assert profile.match_prompt
         assert profile.analysis_prompt
@@ -107,6 +113,16 @@ def test_profile_settings_default_to_no_filter_and_topic_dedup():
     defaults = ProfileSettingsConfig()
     assert defaults.threshold is None
     assert defaults.topic_dedup is True
+
+
+def test_pangmen_profile_accepts_user_facing_access_changes_but_not_parameter_only_news():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-topic-radar")
+
+    assert "免费开放" in profile.analysis_prompt
+    assert "默认模型升级" in profile.analysis_prompt
+    assert "纯参数" in profile.analysis_prompt
 
 
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):

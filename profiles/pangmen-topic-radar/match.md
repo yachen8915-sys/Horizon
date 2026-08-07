@@ -4,6 +4,8 @@ Use this profile only for information that can become a useful, low-threshold vi
 
 Prioritize AI tool or feature updates, practical open-source projects, AI workflows, AI plus PPT, office productivity, content creation, learning efficiency, AI coding entry points, GitHub entry points, and product changes that materially improve a normal person's work method.
 
+Also include user-facing access changes that ordinary people can verify immediately: free availability, default model upgrades, quota or permission changes, and newly opened product entry points. These can be valid topics when the affected users and the practical difference are explicit.
+
 The item must have a concrete user scenario. Strong candidates can be demonstrated through a screen recording, before-and-after comparison, workflow, template, prompt, or repeatable example.
 
-Do not use this profile for model benchmarks, parameter changes, algorithm papers, developer-only framework details, security vulnerability reports, financing-only news, promotional announcements without a usable scenario, unverified claims, or short-lived hype that cannot be demonstrated or converted into work or learning value.
+Do not use this profile for model benchmarks, parameter-only changes, algorithm papers, developer-only framework details, security vulnerability reports, financing-only news, promotional announcements without a usable scenario, unverified claims, or short-lived hype that cannot be demonstrated or converted into work or learning value.

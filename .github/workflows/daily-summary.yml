@@ -44,6 +44,15 @@ jobs:
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
         run: uv run horizon --hours 24
 
+      - name: Upload selection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-selection-diagnostics-${{ github.run_id }}
+          path: data/diagnostics/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Set current date as environment variable
         run: echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 

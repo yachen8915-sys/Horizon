@@ -305,7 +305,7 @@
     },
     "google_news": {
       "enabled": true,
-      "query": "(豆包 OR 通义千问 OR Qwen OR Kimi OR 智谱清言 OR GLM OR 腾讯元宝 OR 文心一言 OR ERNIE OR 夸克AI OR 飞书AI OR WPS AI OR 钉钉AI OR 腾讯文档AI OR WorkBuddy OR 扣子 OR Coze OR TRAE OR Qoder OR 通义灵码 OR 文心快码 OR CodeBuddy OR Dify OR Cherry Studio OR 即梦AI OR 可灵AI OR 通义万相 OR 剪映AI OR 海螺AI OR MiniMax OR Anthropic OR Claude OR Adobe OR Canva OR Cursor) (新功能 OR 更新 OR 发布 OR 实测 OR 教程 OR 争议)",
+      "query": "(OpenAI OR GPT OR ChatGPT OR 豆包 OR 通义千问 OR Qwen OR Kimi OR 智谱清言 OR GLM OR 腾讯元宝 OR 文心一言 OR ERNIE OR 夸克AI OR 飞书AI OR WPS AI OR 钉钉AI OR 腾讯文档AI OR WorkBuddy OR 扣子 OR Coze OR TRAE OR Qoder OR 通义灵码 OR 文心快码 OR CodeBuddy OR Dify OR Cherry Studio OR 即梦AI OR 可灵AI OR 通义万相 OR 剪映AI OR 海螺AI OR MiniMax OR Anthropic OR Claude OR Adobe OR Canva OR Cursor) (新功能 OR 更新 OR 发布 OR 免费 OR 开放 OR 升级 OR 权限 OR 实测 OR 教程 OR 争议)",
       "language": "zh-CN",
       "country": "CN",
       "ceid": "CN:zh-Hans",
