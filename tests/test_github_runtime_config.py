@@ -23,3 +23,4 @@ def test_manual_workflow_has_a_webhook_only_test_mode():
 
     assert "webhook_test" in workflow
     assert "horizon-webhook --config data/config.github.json --lang zh" in workflow
+    assert "- cron: '15 1 * * *'" in workflow
