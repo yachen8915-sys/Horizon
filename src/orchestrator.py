@@ -409,13 +409,6 @@ class HorizonOrchestrator:
                 f"[bold red]{self.icons['error']} Error: {e}[/bold red]"
             )
 
-            # Send webhook failure notification if configured
-            if self.webhook_notifier:
-                await self.webhook_notifier.send_failure(
-                    date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    error_message=str(e),
-                )
-
             raise
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:

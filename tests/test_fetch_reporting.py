@@ -139,7 +139,7 @@ def test_partial_failure_keeps_items_and_source_names(monkeypatch) -> None:
     assert source_reports[1]["error"] == "ValueError: unavailable"
 
 
-def test_native_run_raises_when_every_attempted_source_failed(monkeypatch) -> None:
+def test_native_run_keeps_source_failure_out_of_the_group_webhook(monkeypatch) -> None:
     orchestrator = make_orchestrator()
     orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
         email=None,
@@ -164,7 +164,7 @@ def test_native_run_raises_when_every_attempted_source_failed(monkeypatch) -> No
     with pytest.raises(RuntimeError, match="All 2 attempted sources failed.*GitHub.*RSS Feeds"):
         asyncio.run(orchestrator.run())
 
-    send_failure.assert_awaited_once()
+    send_failure.assert_not_awaited()
 
 
 def test_native_run_treats_all_success_empty_as_no_content(monkeypatch) -> None:
