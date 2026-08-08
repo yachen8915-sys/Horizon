@@ -1,9 +1,6 @@
 name: Daily Horizon Summary
 
 on:
-  schedule:
-    # GitHub scheduled workflows use UTC. 01:15 UTC is 09:15 Asia/Shanghai.
-    - cron: '15 1 * * *'
   workflow_dispatch:
     inputs:
       run_mode:

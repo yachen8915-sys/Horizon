@@ -16,11 +16,12 @@ def test_github_runtime_config_bounds_slow_ai_analysis():
     assert config["ai"]["analysis_concurrency"] == 2
 
 
-def test_manual_workflow_has_a_webhook_only_test_mode():
+def test_workflow_keeps_manual_entry_without_github_native_schedule():
     workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
         encoding="utf-8"
     )
 
     assert "webhook_test" in workflow
     assert "horizon-webhook --config data/config.github.json --lang zh" in workflow
-    assert "- cron: '15 1 * * *'" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "schedule:" not in workflow
