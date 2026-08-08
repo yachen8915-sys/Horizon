@@ -1,0 +1,8 @@
+{
+  "name": "pangmen-daily-watchdog",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

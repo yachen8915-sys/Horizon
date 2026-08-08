@@ -49,6 +49,16 @@ class WebhookDeliveryResult:
         return result
 
 
+class WebhookDeliveryError(RuntimeError):
+    """Raised when a daily webhook message was not accepted by its platform."""
+
+    def __init__(self, results: list[WebhookDeliveryResult]):
+        failed = [result for result in results if not result.sent]
+        statuses = ", ".join(result.status.value for result in failed)
+        super().__init__(f"Webhook delivery failed: {statuses}")
+        self.results = results
+
+
 # Pattern: #{key} or #{key?param1=val1&param2=val2}
 _PLACEHOLDER_RE = re.compile(r"#\{(\w+)(\?\w+=[^}]+)?\}")
 _SENSITIVE_HEADER_RE = re.compile(
@@ -818,7 +828,7 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
-    ) -> None:
+    ) -> list[WebhookDeliveryResult]:
         """Send daily summary webhook notification.
 
         Handles language filtering, delivery mode (summary vs summary_and_items),
@@ -845,13 +855,15 @@ class WebhookNotifier:
                 f"{self.icons['webhook_skip']} Skipping {lang.upper()} webhook notification "
                 f"(filtered by webhook.languages)"
             )
-            return
+            return []
 
         self.console.print(
             f"{self.icons['webhook']} Sending {lang.upper()} webhook notification..."
         )
-        for message in messages:
-            await self.notify(message)
+        results = [await self.notify(message) for message in messages]
+        if any(not result.sent for result in results):
+            raise WebhookDeliveryError(results)
+        return results
 
     async def send_failure(
         self,

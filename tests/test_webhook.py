@@ -21,6 +21,8 @@ from src.models import (
     WebhookConfig,
 )
 from src.services.webhook import (
+    WebhookDeliveryError,
+    WebhookDeliveryResult,
     WebhookNotifier,
     WebhookDeliveryStatus,
     _format_markdown_for_webhook,
@@ -859,6 +861,31 @@ def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
 
 
 class TestSendDailySummary:
+    def test_failed_delivery_raises_error_for_the_orchestrator(self):
+        """A rejected webhook response must fail the run instead of being ignored."""
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(enabled=True, url_env=_TEST_URL_ENV, delivery="summary")
+        notifier = WebhookNotifier(config)
+
+        failed = WebhookDeliveryResult(
+            WebhookDeliveryStatus.PLATFORM_FAILURE,
+            status_code=200,
+            detail="invalid webhook token",
+        )
+        with patch.object(notifier, "notify", new_callable=AsyncMock, return_value=failed):
+            with pytest.raises(WebhookDeliveryError, match="platform_failure"):
+                _run_async(
+                    notifier.send_daily_summary(
+                        summary="中文摘要",
+                        important_items=[_make_item()],
+                        all_items_count=1,
+                        date="2026-08-08",
+                        lang="zh",
+                        summarizer=DailySummarizer(),
+                    )
+                )
+        del os.environ[_TEST_URL_ENV]
+
     def test_summary_delivery_calls_notify_once(self):
         """delivery='summary' sends a single notify call with message_kind='summary'."""
         os.environ[_TEST_URL_ENV] = _TEST_URL
