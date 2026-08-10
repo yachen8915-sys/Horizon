@@ -93,11 +93,15 @@ def _merge_platform_occurrences(primary: ContentItem, other: ContentItem) -> Non
         return
 
     merged_rows: list[dict] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     for row in [*(primary_rows or []), *(other_rows or [])]:
         if not isinstance(row, dict):
             continue
-        key = (str(row.get("platform") or ""), str(row.get("url") or ""))
+        key = (
+            str(row.get("platform") or ""),
+            str(row.get("provider") or ""),
+            str(row.get("url") or ""),
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -113,6 +117,13 @@ def _merge_platform_occurrences(primary: ContentItem, other: ContentItem) -> Non
     )
     primary.metadata["platforms"] = platforms
     primary.metadata["cross_platform_count"] = len(platforms)
+    primary.metadata["providers"] = list(
+        dict.fromkeys(
+            str(row.get("provider"))
+            for row in merged_rows
+            if row.get("provider")
+        )
+    )
 
 
 @dataclass

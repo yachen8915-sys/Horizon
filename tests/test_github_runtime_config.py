@@ -25,6 +25,7 @@ def test_workflow_keeps_manual_entry_without_github_native_schedule():
     assert "horizon-webhook --config data/config.github.json --lang zh" in workflow
     assert "workflow_dispatch:" in workflow
     assert "schedule:" not in workflow
+    assert "ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}" in workflow
 
 
 def test_github_runtime_config_uses_dynamic_radar_mix_under_total_cap():
@@ -43,12 +44,42 @@ def test_github_runtime_config_uses_dynamic_radar_mix_under_total_cap():
     assert config["sources"]["huggingface"]["enabled"] is True
 
     platform_providers = config["sources"]["platform_trends"]["providers"]
-    enabled_platforms = {
-        provider["platform"] for provider in platform_providers if provider["enabled"]
+    dailyhot_platforms = {
+        provider["platform"]
+        for provider in platform_providers
+        if provider["enabled"]
+        and provider["provider"] == "dailyhotapi_public_instance"
     }
-    assert enabled_platforms == {"weibo", "douyin"}
+    assert dailyhot_platforms == {"weibo", "douyin"}
+    alapi_providers = [
+        provider
+        for provider in platform_providers
+        if provider["enabled"] and provider["provider"] == "alapi_tophub"
+    ]
+    assert {provider["platform"] for provider in alapi_providers} == {
+        "weibo",
+        "douyin",
+        "toutiao",
+        "zhihu",
+        "baidu",
+        "36kr",
+    }
+    assert all(provider["api_key_env"] == "ALAPI_TOKEN" for provider in alapi_providers)
+    assert all(provider["response_adapter"] == "alapi_tophub" for provider in alapi_providers)
     assert all(
         not provider["enabled"]
         for provider in platform_providers
         if provider["platform"] in {"xiaohongshu", "wechat"}
     )
+    provider_limits = {
+        (provider["platform"], provider["provider"]): (
+            provider["fetch_limit"],
+            provider["rank_limit"],
+        )
+        for provider in platform_providers
+        if provider["enabled"]
+    }
+    assert provider_limits[("weibo", "alapi_tophub")] == (30, 30)
+    assert provider_limits[("toutiao", "alapi_tophub")] == (20, 20)
+    assert provider_limits[("zhihu", "alapi_tophub")] == (20, 20)
+    assert "platform-trend" not in config["digest"]["category_groups"]

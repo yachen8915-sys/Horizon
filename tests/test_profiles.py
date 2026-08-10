@@ -169,16 +169,65 @@ def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters(
     assert "政治敏感" in profile.match_prompt
     assert "娱乐" in profile.match_prompt
     assert "无自然连接" in profile.analysis_prompt
-    assert "优先追" in profile.analysis_prompt
-    assert "优先追 / 追 / 观察 / 忽略" in profile.enrichment_prompt
-    assert {block.id for block in profile.definition.enrichment.blocks} == {
+    assert "借势自然度" in profile.analysis_prompt
+    assert "最高 4 分" in profile.analysis_prompt
+    assert "投资建议" in profile.analysis_prompt
+    assert "热点独有资产" in profile.analysis_prompt
+    assert "热点爆点" in profile.analysis_prompt
+    assert "如果这个热点今天没有上热榜" in profile.analysis_prompt
+    assert "同质化惩罚" in profile.analysis_prompt
+    assert "热点替换测试" in profile.analysis_prompt
+    assert "热点资产测试" in profile.analysis_prompt
+    assert "内容结果测试" in profile.analysis_prompt
+    assert "热点增益测试" in profile.analysis_prompt
+    assert "热点独有资产" in profile.enrichment_prompt
+    assert "热点爆点" in profile.enrichment_prompt
+    assert "4-6 个候选" in profile.enrichment_prompt
+    assert "同质化惩罚" in profile.enrichment_prompt
+    assert "观点 / 反常识" in profile.enrichment_prompt
+    assert "主推角度排序" in profile.enrichment_prompt
+    assert "AI + PPT" in profile.enrichment_prompt
+    assert "不要先选类别" in profile.enrichment_prompt
+    assert "固定类型槽位" in profile.enrichment_prompt
+    assert "不显示热点爆点、热点资产、内部评分、行动建议、风险" in profile.enrichment_prompt
+    assert "优先追 / 追 / 观察 / 忽略" not in profile.enrichment_prompt
+    blocks = {
+        block.id: block for block in profile.definition.enrichment.blocks
+    }
+    assert set(blocks) == {
         "what_happened",
-        "relevance",
-        "borrowing_angles",
-        "recommendation",
-        "risk",
+        "primary_angle",
+        "backup_angle",
         "source_evidence",
     }
+    assert blocks["primary_angle"].optional is False
+    assert blocks["backup_angle"].optional is True
+
+
+def test_platform_trend_profile_keeps_three_regression_anchors():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-platform-trend-radar")
+
+    combined = profile.analysis_prompt + profile.enrichment_prompt
+    assert "宇树科技 IPO" in combined
+    assert "物流总额年均增长 5.7%" in combined
+    assert "5-6 分" in combined
+    assert "车企回归实体按键" in combined
+    assert "AI 工具会不会也走同一条路" in combined
+    assert "把资料交给两个 AI" in combined
+
+
+def test_platform_trend_profile_rejects_beauty_topics_forced_into_ai_visuals():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-platform-trend-radar")
+
+    combined = profile.analysis_prompt + profile.enrichment_prompt
+    assert "小眼睛避雷这个睫毛特效" in combined
+    assert "添加 AI / PPT 标签不能制造账号相关性" in combined
+    assert "美妆、妆容、穿搭或滤镜玩法" in combined
+    assert "最高 4 分" in combined
 
 
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):

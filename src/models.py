@@ -493,13 +493,36 @@ class PlatformTrendProviderConfig(BaseModel):
     """One configurable public or third-party platform trend endpoint."""
 
     enabled: bool = True
-    platform: Literal["weibo", "douyin", "xiaohongshu", "wechat"]
+    platform: Literal[
+        "weibo",
+        "douyin",
+        "xiaohongshu",
+        "wechat",
+        "toutiao",
+        "zhihu",
+        "baidu",
+        "36kr",
+    ]
     provider: str
+    provider_name: Optional[str] = None
     base_url: Optional[HttpUrl] = None
+    endpoint: Optional[str] = None
+    request_method: Literal["GET", "POST"] = "GET"
+    response_adapter: Literal["generic", "dailyhotapi", "alapi_tophub"] = (
+        "generic"
+    )
     source_id: Optional[str] = None
+    query_params: Dict[str, Union[str, int, float, bool]] = Field(
+        default_factory=dict
+    )
+    body_params: Dict[str, Union[str, int, float, bool]] = Field(
+        default_factory=dict
+    )
     api_key_env: Optional[str] = None
+    auth_type: Literal["header", "query"] = "header"
     api_key_header: str = "Authorization"
     api_key_prefix: str = "Bearer"
+    observed_timezone: str = "UTC"
     fetch_limit: int = Field(default=20, ge=1, le=100)
     rank_limit: int = Field(default=50, ge=1, le=100)
     category: str = "platform-trend"

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -41,7 +43,7 @@ class PlatformTrendsScraper(BaseScraper):
                     provider.provider,
                     exc,
                 )
-        return items
+        return self._merge_exact_topics(items)
 
     async def _fetch_provider(
         self,
@@ -55,25 +57,46 @@ class PlatformTrendsScraper(BaseScraper):
             return []
 
         headers: dict[str, str] = {}
+        query_params = dict(provider.query_params)
+        body_params = dict(provider.body_params)
         if provider.api_key_env:
             api_key = os.getenv(provider.api_key_env)
             if not api_key:
                 logger.warning(
-                    "%s not configured, skipping %s trends",
+                    "%s not configured, skipping %s provider.",
                     provider.api_key_env,
-                    provider.platform,
+                    provider.provider,
                 )
                 return []
             prefix = provider.api_key_prefix.strip()
-            headers[provider.api_key_header] = f"{prefix} {api_key}".strip()
+            value = f"{prefix} {api_key}".strip()
+            if provider.auth_type == "query":
+                query_params[provider.api_key_header] = value
+            else:
+                headers[provider.api_key_header] = value
 
-        params = {"id": provider.source_id} if provider.source_id else None
-        response = await self.client.get(
-            str(provider.base_url),
-            params=params,
-            headers=headers,
-            follow_redirects=True,
-        )
+        if provider.source_id:
+            target_params = (
+                body_params if provider.request_method == "POST" else query_params
+            )
+            target_params.setdefault("id", provider.source_id)
+
+        request_url = str(provider.base_url).rstrip("/")
+        if provider.endpoint:
+            request_url += "/" + provider.endpoint.lstrip("/")
+        request_kwargs = {
+            "params": query_params or None,
+            "headers": headers,
+            "follow_redirects": True,
+        }
+        if provider.request_method == "POST":
+            response = await self.client.post(
+                request_url,
+                json=body_params or None,
+                **request_kwargs,
+            )
+        else:
+            response = await self.client.get(request_url, **request_kwargs)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
@@ -86,10 +109,22 @@ class PlatformTrendsScraper(BaseScraper):
                 payload.get("code"),
             )
             return []
-        rows = payload.get("items") or payload.get("data") or []
+        adapter_payload = payload
+        if provider.response_adapter == "alapi_tophub":
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                return []
+            rows = data.get("list") or []
+            adapter_payload = {
+                "updatedTime": data.get("last_update") or data.get("last_time")
+            }
+        else:
+            rows = payload.get("items") or payload.get("data") or []
         if not isinstance(rows, list):
             return []
-        observed_at = self._observed_at(payload)
+        observed_at = self._observed_at(
+            adapter_payload, provider.observed_timezone
+        )
         since_utc = (
             since.replace(tzinfo=timezone.utc)
             if since.tzinfo is None
@@ -121,14 +156,15 @@ class PlatformTrendsScraper(BaseScraper):
         if not isinstance(row, dict):
             return None
         title = str(row.get("title") or row.get("keyword") or "").strip()
-        url = str(row.get("url") or row.get("mobileUrl") or "").strip()
+        url = str(
+            row.get("url") or row.get("mobileUrl") or row.get("link") or ""
+        ).strip()
         if not title or not url:
             return None
         raw_id = str(row.get("id") or title)
         hot_value = self._hot_value(row)
-        content = (
-            f"{provider.platform} 榜单第 {rank} 位；数据由 {provider.provider} 聚合。"
-        )
+        provider_name = provider.provider_name or provider.provider
+        content = f"{provider.platform} 榜单第 {rank} 位；数据由 {provider_name} 聚合。"
         if hot_value is not None:
             content += f" 热度值：{hot_value}。"
         else:
@@ -138,7 +174,8 @@ class PlatformTrendsScraper(BaseScraper):
             "rank": rank,
             "hot_value": hot_value,
             "url": url,
-            "provider": provider.provider,
+            "provider": provider_name,
+            "provider_id": provider.provider,
         }
         return ContentItem(
             id=self._generate_id(
@@ -150,13 +187,15 @@ class PlatformTrendsScraper(BaseScraper):
             title=title,
             url=url,
             content=content,
-            author=provider.provider,
+            author=provider_name,
             published_at=observed_at,
             profile=provider.profile,
             metadata={
                 "category": provider.category,
                 "platform": provider.platform,
                 "provider": provider.provider,
+                "provider_name": provider_name,
+                "providers": [provider_name],
                 "source_name": f"{provider.provider}:{provider.platform}",
                 "source_kind": "aggregator",
                 "reliability": provider.reliability,
@@ -167,17 +206,23 @@ class PlatformTrendsScraper(BaseScraper):
                     {"hot_value": hot_value} if hot_value is not None else {}
                 ),
                 "platform_occurrences": [occurrence],
+                "platforms": [provider.platform],
+                "cross_platform_count": 1,
             },
         )
 
     @staticmethod
-    def _observed_at(payload: dict[str, Any]) -> datetime:
+    def _observed_at(payload: dict[str, Any], timezone_name: str = "UTC") -> datetime:
         raw = payload.get("updatedTime") or payload.get("updateTime")
         try:
             if isinstance(raw, str) and not raw.replace(".", "", 1).isdigit():
-                return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(
-                    timezone.utc
-                )
+                parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    try:
+                        parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+                    except ZoneInfoNotFoundError:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
             timestamp = float(raw)
             if timestamp > 10_000_000_000:
                 timestamp /= 1000
@@ -192,6 +237,7 @@ class PlatformTrendsScraper(BaseScraper):
             row.get("hotValue"),
             row.get("hot"),
             row.get("score"),
+            row.get("other"),
         ]
         extra = row.get("extra")
         if isinstance(extra, dict):
@@ -203,8 +249,81 @@ class PlatformTrendsScraper(BaseScraper):
                 return value
             if isinstance(value, str):
                 compact = value.replace(",", "").strip()
+                unit_match = re.search(r"(-?\d+(?:\.\d+)?)\s*([万亿]?)", compact)
+                if unit_match:
+                    number = float(unit_match.group(1))
+                    multiplier = {"": 1, "万": 10_000, "亿": 100_000_000}[
+                        unit_match.group(2)
+                    ]
+                    parsed = number * multiplier
+                    return int(parsed) if parsed.is_integer() else parsed
                 try:
                     return float(compact) if "." in compact else int(compact)
                 except ValueError:
                     continue
         return None
+
+    @staticmethod
+    def _topic_key(title: str) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", title.casefold())
+
+    @classmethod
+    def _merge_exact_topics(cls, items: list[ContentItem]) -> list[ContentItem]:
+        """Merge exact normalized titles before AI analysis.
+
+        Provider confirmation and cross-platform occurrence are stored as
+        separate metadata dimensions so two aggregators never masquerade as
+        two social platforms.
+        """
+        merged: list[ContentItem] = []
+        by_title: dict[str, ContentItem] = {}
+        for item in items:
+            key = cls._topic_key(item.title)
+            primary = by_title.get(key)
+            if not key or primary is None:
+                by_title[key] = item
+                merged.append(item)
+                continue
+
+            rows = [
+                *(primary.metadata.get("platform_occurrences") or []),
+                *(item.metadata.get("platform_occurrences") or []),
+            ]
+            unique_rows: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                occurrence_key = (
+                    str(row.get("platform") or ""),
+                    str(row.get("provider") or ""),
+                    str(row.get("url") or ""),
+                )
+                if occurrence_key in seen:
+                    continue
+                seen.add(occurrence_key)
+                unique_rows.append(row)
+
+            providers = list(
+                dict.fromkeys(
+                    str(row.get("provider"))
+                    for row in unique_rows
+                    if row.get("provider")
+                )
+            )
+            platforms = list(
+                dict.fromkeys(
+                    str(row.get("platform"))
+                    for row in unique_rows
+                    if row.get("platform")
+                )
+            )
+            primary.metadata["platform_occurrences"] = unique_rows
+            primary.metadata["providers"] = providers
+            primary.metadata["platforms"] = platforms
+            primary.metadata["cross_platform_count"] = len(platforms)
+            if len(providers) > 1:
+                primary.content += f" 多个数据来源确认：{' + '.join(providers)}。"
+            if len(platforms) > 1:
+                primary.content += f" 该话题同时出现在{'、'.join(platforms)}榜单。"
+        return merged

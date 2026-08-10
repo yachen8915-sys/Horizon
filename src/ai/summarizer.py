@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo
 
 from .localization import normalize_language
 from ..models import ContentItem
@@ -25,6 +26,7 @@ CONTENT_RADAR_PROFILE_IDS = frozenset(
         PLATFORM_TREND_RADAR_PROFILE_ID,
     }
 )
+MINING_MARKET_RADAR_PROFILE_ID = "mining-market-radar"
 TOPIC_RADAR_HIDDEN_BLOCK_IDS = frozenset(
     {"content_format", "demo_or_case", "priority_reason", "verification"}
 )
@@ -135,9 +137,11 @@ class DailySummarizer:
         self,
         profile_names: Optional[Dict[str, Dict[str, str]]] = None,
         profile_order: Optional[List[str]] = None,
+        profile_hint: Optional[str] = None,
     ):
         self.profile_names = profile_names or {}
         self.profile_order = profile_order or []
+        self.profile_hint = profile_hint
 
     @staticmethod
     def _profile_id(item: ContentItem) -> str:
@@ -245,6 +249,15 @@ class DailySummarizer:
         if (
             not items
             and language == "zh"
+            and self.profile_hint == MINING_MARKET_RADAR_PROFILE_ID
+        ):
+            return self._generate_mining_market_brief(
+                [], date=date, total_fetched=total_fetched, language=language
+            )
+
+        if (
+            not items
+            and language == "zh"
             and any(
                 profile_id
                 in {AI_TECH_RADAR_PROFILE_ID, PLATFORM_TREND_RADAR_PROFILE_ID}
@@ -278,6 +291,18 @@ class DailySummarizer:
                 group.profile_id in CONTENT_RADAR_PROFILE_IDS for group in view.groups
             )
         )
+        mining_market_mode = (
+            language == "zh"
+            and len(view.groups) == 1
+            and view.groups[0].profile_id == MINING_MARKET_RADAR_PROFILE_ID
+        )
+        if mining_market_mode:
+            return self._generate_mining_market_brief(
+                view.groups[0].items,
+                date=date,
+                total_fetched=total_fetched,
+                language=language,
+            )
         if content_radar_mode:
             return self._generate_pangmen_content_radar(
                 view,
@@ -425,6 +450,168 @@ class DailySummarizer:
                 )
         return normalize_language("".join(parts).rstrip() + "\n", language)
 
+    @staticmethod
+    def _artifact_block_content(item: ContentItem, language: str, block_id: str) -> str:
+        if not item.processing:
+            return ""
+        artifact = item.processing.artifacts.get(language)
+        if not artifact:
+            return ""
+        block = next((entry for entry in artifact.blocks if entry.id == block_id), None)
+        return block.content.strip() if block else ""
+
+    def _generate_mining_market_brief(
+        self,
+        items: List[SummaryItemView],
+        *,
+        date: str,
+        total_fetched: int,
+        language: str,
+    ) -> str:
+        """Render the compact, evidence-first mining morning brief."""
+        section_specs = (
+            ("today", "今日新增"),
+            ("market", "市场与价格"),
+            ("watch", "近7天持续关注"),
+            ("company", "竞品与项目"),
+        )
+        grouped: Dict[str, List[SummaryItemView]] = {
+            section: [] for section, _ in section_specs
+        }
+        for view_item in items:
+            item = view_item.item
+            section = item.metadata.get("brief_section")
+            if section not in grouped:
+                time_label = item.metadata.get("brief_time_label")
+                category = item.metadata.get("category")
+                if time_label == "今日新增":
+                    section = "today"
+                elif category == "mining-market":
+                    section = "market"
+                elif category == "mining-company":
+                    section = "company"
+                else:
+                    section = "watch"
+            grouped[section].append(view_item)
+
+        today_count = len(grouped["today"])
+        watch_count = len(items) - today_count
+
+        header = (
+            "# 矿业市场情报晨报｜今日新增 + 近7天重点\n\n"
+            f"> 日期：{date}｜从 {total_fetched} 条公开信息中筛选出 {len(items)} 条重点情报；"
+            f"今日新增 {today_count} 条，近7天持续关注 {watch_count} 条。"
+            "演示岗位画像为假设场景，不代表华夏建龙真实内部岗位设置。\n\n"
+        )
+        core = self._mining_core_judgment(grouped, language)
+        sections = [header, "## 今日核心判断\n\n", core, "\n\n"]
+        for section, section_title in section_specs:
+            sections.append(f"## {section_title}\n\n")
+            section_items = grouped[section]
+            if not section_items:
+                empty_message = (
+                    "过去24小时暂无符合高可信、高相关标准的新增情报。"
+                    if section == "today"
+                    else "近7天暂无符合高可信、高相关标准的重点更新。"
+                )
+                sections.extend([empty_message, "\n\n"])
+                continue
+            for index, view_item in enumerate(section_items, start=1):
+                sections.append(
+                    self._format_mining_brief_item(
+                        view_item.item,
+                        index=index,
+                        language=language,
+                        title_override=view_item.title,
+                    )
+                )
+        return normalize_language("".join(sections).rstrip() + "\n", language)
+
+    def _mining_core_judgment(
+        self,
+        grouped: Dict[str, List[SummaryItemView]],
+        language: str,
+    ) -> str:
+        sentences = []
+        today_items = grouped["today"]
+        if today_items:
+            lead = today_items[0]
+            impact = self._artifact_block_content(lead.item, language, "why_it_matters")
+            sentence = f"今日最重要的新增变量是「{lead.title}」"
+            if impact:
+                sentence += f"：{impact}"
+            sentences.append(sentence.rstrip("。") + "。")
+        else:
+            sentences.append("过去24小时暂无符合高可信、高相关标准的重要新增，今天的判断主要延续近7天已确认变量。")
+
+        market_items = grouped["market"] or grouped["watch"]
+        if market_items:
+            lead = market_items[0]
+            impact = self._artifact_block_content(lead.item, language, "why_it_matters")
+            sentence = f"近7天最值得关注的市场变量是「{lead.title}」"
+            if impact:
+                sentence += f"：{impact}"
+            sentences.append(sentence.rstrip("。") + "。")
+
+        follow_items = grouped["watch"] or grouped["company"]
+        if follow_items:
+            lead = follow_items[0]
+            sentences.append(f"需要继续跟踪「{lead.title}」的后续进展和实际经营影响。")
+        else:
+            sentences.append("需要继续跟踪官方市场数据和重点矿企公告，不把付费或延迟数据写成实时公开行情。")
+        return "".join(sentences[:3])
+
+    def _format_mining_brief_item(
+        self,
+        item: ContentItem,
+        *,
+        index: int,
+        language: str,
+        title_override: str,
+    ) -> str:
+        title = _pangu(_escape_markdown(title_override))
+        safe_url = _safe_url(item.url)
+        title_text = f"[{title}]({safe_url})" if safe_url else title
+        blocks = {
+            block_id: _pangu(_escape_markdown(
+                self._artifact_block_content(item, language, block_id)
+            ))
+            for block_id in (
+                "what_happened",
+                "key_numbers",
+                "why_it_matters",
+            )
+        }
+        lines = [f"### {index}. {title_text}", ""]
+        time_label = item.metadata.get("brief_time_label", "近7天持续关注")
+        lines.extend([f"**时间标签**：{_escape_markdown(time_label)}", ""])
+        happened = blocks["what_happened"]
+        if blocks["key_numbers"]:
+            happened = f"{happened} {blocks['key_numbers']}".strip()
+        field_values = (
+            ("发生了什么", happened),
+            ("为什么值得资源板块市场经理关注", blocks["why_it_matters"]),
+        )
+        for label, value in field_values:
+            if value:
+                lines.extend([f"**{label}**：{value}", ""])
+
+        raw_source_name = (
+            item.metadata.get("feed_name") or item.author or item.source_type.value
+        )
+        if str(raw_source_name).startswith("Google News"):
+            _, separator, publisher = item.title.rpartition(" - ")
+            if separator and publisher.strip():
+                raw_source_name = publisher.strip()
+        source_name = _escape_markdown(raw_source_name)
+        published = "发布时间未知"
+        if item.published_at:
+            beijing_time = item.published_at.astimezone(ZoneInfo("Asia/Shanghai"))
+            published = f"{beijing_time:%Y-%m-%d %H:%M}（北京时间）"
+        source_text = f"{source_name} · {published}"
+        lines.extend([f"**来源和发布时间**：{source_text}", "", "---", ""])
+        return "\n".join(lines) + "\n"
+
     def generate_webhook_overview(
         self,
         items: List[ContentItem],
@@ -513,6 +700,19 @@ class DailySummarizer:
         """Format a single ContentItem into Markdown."""
         if topic_card and language == "zh":
             return self._format_compact_topic_card(item, index, anchor_id, title_override)
+        profile_id = (
+            item.processing.classification.profile
+            if item.processing
+            else item.profile
+        )
+        if language == "zh" and profile_id == PLATFORM_TREND_RADAR_PROFILE_ID:
+            return self._format_compact_platform_trend_card(
+                item,
+                index=index,
+                anchor_id=anchor_id,
+                title_override=title_override,
+                score_override=score_override,
+            )
         artifact = item.processing.artifacts.get(language) if item.processing else None
         analysis = item.processing.analysis if item.processing else None
         is_topic_radar = (
@@ -643,6 +843,239 @@ class DailySummarizer:
         lines.append("---")
 
         return "\n".join(lines) + "\n\n"
+
+    @staticmethod
+    def _compact_trend_text(value: object, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text if len(text) <= limit else text[:limit].rstrip("，。；、 ") + "……"
+
+    @classmethod
+    def _compact_trend_brief(cls, value: object) -> str:
+        text = cls._compact_trend_text(value, 180)
+        sentences = [
+            part.strip()
+            for part in re.findall(r"[^。！？!?]+[。！？!?]?", text)
+            if part.strip()
+        ]
+        return cls._compact_trend_text("".join(sentences[:2]), 160)
+
+    @staticmethod
+    def _is_generic_trend_angle(value: str) -> bool:
+        compact = re.sub(r"[\s，。；、｜|:：]+", "", value).casefold()
+        banned = (
+            "科技趋势解读",
+            "公司背景介绍",
+            "投资分析",
+            "行业分析",
+            "热点点评",
+            "投资建议",
+            "ai能否提升效率",
+            "用ai做一下",
+            "用ppt展示一下",
+            "结合账号定位做内容",
+            "看看这个工具好不好用",
+            "把一周聊天记录交给ai",
+            "一页成果看板替代流水账周报",
+            "关闭全部通知和改用功能机",
+            "机器人公司怎么赚钱",
+            "申购策略",
+            "股票分析",
+            "估值建议",
+            "是否值得申购",
+        )
+        return any(phrase in compact for phrase in banned)
+
+    @staticmethod
+    def _format_trend_hot_value(value: object) -> str:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return ""
+        number = float(value)
+        if abs(number) >= 100_000_000:
+            shown = f"{number / 100_000_000:.1f}".rstrip("0").rstrip(".")
+            return f"{shown} 亿"
+        if abs(number) >= 10_000:
+            shown = f"{number / 10_000:.1f}".rstrip("0").rstrip(".")
+            return f"{shown} 万"
+        return f"{number:g}"
+
+    @staticmethod
+    def _trend_platform_label(platform: object) -> str:
+        labels = {
+            "weibo": "微博",
+            "douyin": "抖音",
+            "xiaohongshu": "小红书",
+            "wechat": "微信",
+            "toutiao": "今日头条",
+            "zhihu": "知乎",
+            "baidu": "百度",
+            "36kr": "36Kr",
+        }
+        raw = str(platform or "").strip()
+        return labels.get(raw, raw)
+
+    @classmethod
+    def _compact_trend_source(cls, item: ContentItem) -> str:
+        rows = item.metadata.get("platform_occurrences")
+        occurrences = [row for row in (rows or []) if isinstance(row, dict)]
+        if not occurrences:
+            occurrences = [
+                {
+                    "platform": item.metadata.get("platform"),
+                    "rank": item.metadata.get("rank"),
+                    "hot_value": item.metadata.get("hot_value"),
+                    "url": item.metadata.get("original_url") or item.url,
+                    "provider": item.metadata.get("provider_name")
+                    or item.metadata.get("provider")
+                    or item.author,
+                }
+            ]
+
+        by_platform: dict[str, list[dict]] = {}
+        for row in occurrences:
+            platform = str(row.get("platform") or "").strip()
+            if platform:
+                by_platform.setdefault(platform, []).append(row)
+
+        platform_parts = []
+        for platform, platform_rows in by_platform.items():
+            ranks = [
+                int(row["rank"])
+                for row in platform_rows
+                if isinstance(row.get("rank"), (int, float))
+            ]
+            part = cls._trend_platform_label(platform)
+            if ranks:
+                part += f" #{min(ranks)}"
+            platform_parts.append(part)
+
+        cross_platform = len(by_platform) > 1
+        source_parts = [" / ".join(platform_parts) or "平台榜单"]
+        if cross_platform:
+            source_parts.append("多平台出现")
+        else:
+            hot_values = [
+                row.get("hot_value")
+                for row in occurrences
+                if isinstance(row.get("hot_value"), (int, float))
+            ]
+            if hot_values:
+                hot_text = cls._format_trend_hot_value(max(hot_values))
+                if hot_text:
+                    source_parts.append(f"热度 {hot_text}")
+
+        providers = item.metadata.get("providers")
+        if not isinstance(providers, list):
+            providers = []
+        provider_names = list(
+            dict.fromkeys(
+                [str(value) for value in providers if value]
+                + [
+                    str(row.get("provider"))
+                    for row in occurrences
+                    if row.get("provider")
+                ]
+            )
+        )
+        if provider_names:
+            source_parts.append(" + ".join(provider_names))
+
+        raw_url = next(
+            (str(row.get("url")) for row in occurrences if row.get("url")),
+            str(item.metadata.get("original_url") or item.url),
+        )
+        safe_url = _safe_url(raw_url)
+        if safe_url:
+            source_parts.append(f"[原始链接]({safe_url})")
+        return "｜".join(source_parts)
+
+    def _format_compact_platform_trend_card(
+        self,
+        item: ContentItem,
+        *,
+        index: int,
+        anchor_id: Optional[str],
+        title_override: Optional[str],
+        score_override: float | str | None,
+    ) -> str:
+        """Render a short operations-trend card with verified source metadata."""
+        artifact = item.processing.artifacts.get("zh") if item.processing else None
+        blocks = {block.id: block for block in (artifact.blocks if artifact else [])}
+        title = _pangu(
+            _escape_markdown(title_override or (artifact.title if artifact else item.title))
+        )
+        score = (
+            score_override
+            if score_override is not None
+            else item.processing.analysis.score
+            if item.processing and item.processing.analysis
+            else "?"
+        )
+        happened = self._compact_trend_brief(
+            blocks.get("what_happened").content
+            if blocks.get("what_happened")
+            else item.content
+        )
+        def valid_angles(value: object) -> list[str]:
+            values: list[str] = []
+            for raw_angle in re.split(r"\r?\n+|[；;]+", str(value or "")):
+                angle = re.sub(
+                    r"^\s*(?:[-*•]|\d+[.)、])\s*", "", raw_angle
+                ).strip()
+                if not angle or self._is_generic_trend_angle(angle):
+                    continue
+                compact = self._compact_trend_text(angle, 60)
+                if compact not in values:
+                    values.append(compact)
+            return values
+
+        primary_values = valid_angles(
+            blocks.get("primary_angle").content
+            if blocks.get("primary_angle")
+            else ""
+        )
+        backup_values = valid_angles(
+            blocks.get("backup_angle").content
+            if blocks.get("backup_angle")
+            else ""
+        )
+        legacy_values = valid_angles(
+            blocks.get("borrowing_angles").content
+            if blocks.get("borrowing_angles")
+            else ""
+        )
+        primary_angle = next(iter(primary_values or backup_values or legacy_values), "")
+        backup_pool = backup_values + legacy_values
+        backup_angle = next(
+            (value for value in backup_pool if value != primary_angle), ""
+        )
+
+        lines = [
+            f'<a id="{anchor_id or f"item-{index}"}"></a>',
+            f"### {title} ⭐️ {score}/10",
+            "",
+            f"**【热点简报】** {happened}",
+        ]
+        if primary_angle:
+            lines.extend(
+                ["", f"**【主推角度】** {_pangu(_escape_markdown(primary_angle))}"]
+            )
+        if backup_angle:
+            lines.extend(
+                ["", f"**【备选角度】** {_pangu(_escape_markdown(backup_angle))}"]
+            )
+        lines.extend(["", f"来源：{self._compact_trend_source(item)}"])
+
+        tags = (
+            item.processing.analysis.tags
+            if item.processing and item.processing.analysis
+            else []
+        )[:5]
+        if tags:
+            lines.extend(
+                ["", "标签：" + " ".join(f"#{_escape_markdown(tag)}" for tag in tags)]
+            )
+        lines.extend(["", "---", ""])
+        return "\n".join(lines)
 
     def _format_compact_topic_card(
         self, item: ContentItem, index: int, anchor_id: Optional[str], title_override: Optional[str]

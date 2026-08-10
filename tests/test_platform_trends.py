@@ -243,3 +243,201 @@ def test_stale_platform_snapshot_is_not_presented_as_current_trend():
     )
 
     assert items == []
+
+
+def test_alapi_tophub_adapter_posts_token_and_parses_nested_list(monkeypatch):
+    monkeypatch.setenv("ALAPI_TOKEN", "test-token")
+    client = AsyncMock()
+    client.post.return_value = _response(
+        {
+            "code": 200,
+            "success": True,
+            "data": {
+                "name": "抖音 - 热点榜",
+                "last_update": "2026-08-09 17:26:40",
+                "list": [
+                    {
+                        "title": "年轻人开始反向使用周报",
+                        "link": "https://www.douyin.com/hot/2602902",
+                        "other": "776万",
+                    }
+                ],
+            },
+        }
+    )
+    provider = PlatformTrendProviderConfig(
+        platform="douyin",
+        provider="alapi_tophub",
+        provider_name="ALAPI",
+        base_url="https://v3.alapi.cn",
+        endpoint="/api/tophub",
+        request_method="POST",
+        response_adapter="alapi_tophub",
+        source_id="BOoYax",
+        api_key_env="ALAPI_TOKEN",
+        api_key_header="token",
+        api_key_prefix="",
+        observed_timezone="Asia/Shanghai",
+    )
+
+    item = asyncio.run(
+        PlatformTrendsScraper(
+            PlatformTrendsConfig(enabled=True, providers=[provider]), client
+        ).fetch(SINCE)
+    )[0]
+
+    client.post.assert_awaited_once()
+    request = client.post.await_args
+    assert request.kwargs["headers"] == {"token": "test-token"}
+    assert request.kwargs["json"] == {"id": "BOoYax"}
+    assert item.metadata["provider"] == "alapi_tophub"
+    assert item.metadata["providers"] == ["ALAPI"]
+    assert item.metadata["hot_value"] == 7_760_000
+    assert item.published_at.isoformat() == "2026-08-09T09:26:40+00:00"
+
+
+def test_missing_alapi_token_is_gracefully_skipped(monkeypatch, caplog):
+    monkeypatch.delenv("ALAPI_TOKEN", raising=False)
+    client = AsyncMock()
+    provider = PlatformTrendProviderConfig(
+        platform="weibo",
+        provider="alapi_tophub",
+        provider_name="ALAPI",
+        base_url="https://v3.alapi.cn",
+        endpoint="/api/tophub",
+        request_method="POST",
+        response_adapter="alapi_tophub",
+        source_id="BaXJOg",
+        api_key_env="ALAPI_TOKEN",
+        api_key_header="token",
+        api_key_prefix="",
+    )
+
+    items = asyncio.run(
+        PlatformTrendsScraper(
+            PlatformTrendsConfig(enabled=True, providers=[provider]), client
+        ).fetch(SINCE)
+    )
+
+    assert items == []
+    client.post.assert_not_awaited()
+    assert "ALAPI_TOKEN not configured, skipping alapi_tophub provider" in caplog.text
+
+
+def test_same_platform_topic_from_two_providers_merges_without_cross_platform(monkeypatch):
+    monkeypatch.setenv("ALAPI_TOKEN", "test-token")
+    client = AsyncMock()
+    client.get.return_value = _response(
+        {
+            "code": 200,
+            "updateTime": "2026-08-09T17:26:40Z",
+            "data": [
+                {
+                    "title": "宇树科技启动申购",
+                    "url": "https://www.douyin.com/hot/unitree",
+                    "hot": 7_760_000,
+                }
+            ],
+        }
+    )
+    client.post.return_value = _response(
+        {
+            "code": 200,
+            "data": {
+                "last_update": "2026-08-10 01:26:40",
+                "list": [
+                    {
+                        "title": "宇树科技启动申购",
+                        "link": "https://alapi.example/unitree",
+                        "other": "776万",
+                    }
+                ],
+            },
+        }
+    )
+    providers = [
+        PlatformTrendProviderConfig(
+            platform="douyin",
+            provider="dailyhotapi_public_instance",
+            provider_name="DailyHotAPI",
+            base_url="https://dailyhotapi.vercel.app/douyin",
+            response_adapter="dailyhotapi",
+        ),
+        PlatformTrendProviderConfig(
+            platform="douyin",
+            provider="alapi_tophub",
+            provider_name="ALAPI",
+            base_url="https://v3.alapi.cn",
+            endpoint="/api/tophub",
+            request_method="POST",
+            response_adapter="alapi_tophub",
+            source_id="BOoYax",
+            api_key_env="ALAPI_TOKEN",
+            api_key_header="token",
+            api_key_prefix="",
+            observed_timezone="Asia/Shanghai",
+        ),
+    ]
+
+    items = asyncio.run(
+        PlatformTrendsScraper(
+            PlatformTrendsConfig(enabled=True, providers=providers), client
+        ).fetch(SINCE)
+    )
+
+    assert len(items) == 1
+    assert items[0].metadata["providers"] == ["DailyHotAPI", "ALAPI"]
+    assert items[0].metadata["platforms"] == ["douyin"]
+    assert items[0].metadata["cross_platform_count"] == 1
+    assert len(items[0].metadata["platform_occurrences"]) == 2
+
+
+def test_same_topic_on_two_platforms_preserves_cross_platform_occurrences():
+    client = AsyncMock()
+    client.get.side_effect = [
+        _response(
+            {
+                "items": [
+                    {
+                        "title": "年轻人开始反向使用周报",
+                        "url": "https://weibo.example/reverse-weekly",
+                    }
+                ]
+            }
+        ),
+        _response(
+            {
+                "items": [
+                    {
+                        "title": "年轻人开始反向使用周报",
+                        "url": "https://douyin.example/reverse-weekly",
+                    }
+                ]
+            }
+        ),
+    ]
+    providers = [
+        PlatformTrendProviderConfig(
+            platform="weibo",
+            provider="provider_a",
+            provider_name="Provider A",
+            base_url="https://provider.example/weibo",
+        ),
+        PlatformTrendProviderConfig(
+            platform="douyin",
+            provider="provider_b",
+            provider_name="Provider B",
+            base_url="https://provider.example/douyin",
+        ),
+    ]
+
+    items = asyncio.run(
+        PlatformTrendsScraper(
+            PlatformTrendsConfig(enabled=True, providers=providers), client
+        ).fetch(SINCE)
+    )
+
+    assert len(items) == 1
+    assert items[0].metadata["platforms"] == ["weibo", "douyin"]
+    assert items[0].metadata["cross_platform_count"] == 2
+    assert items[0].metadata["providers"] == ["Provider A", "Provider B"]

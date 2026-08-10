@@ -15,10 +15,8 @@
     "prompt": "enrichment.md",
     "blocks": [
       {"id": "what_happened", "type": "section", "tools": [], "primary": true},
-      {"id": "relevance", "type": "section", "tools": []},
-      {"id": "borrowing_angles", "type": "section", "tools": []},
-      {"id": "recommendation", "type": "section", "tools": []},
-      {"id": "risk", "type": "section", "tools": [], "optional": true},
+      {"id": "primary_angle", "type": "section", "tools": []},
+      {"id": "backup_angle", "type": "section", "tools": [], "optional": true},
       {"id": "source_evidence", "type": "section", "tools": []}
     ]
   }

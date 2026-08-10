@@ -50,6 +50,7 @@ data/x_cookies_*.json
 data/aihot-stage2-*/
 data/formal-7d-*/
 data/config.pangmen-topic-radar.json
+data/mining-market-radar/
 .agents/
 scripts/run_aihot_stage2_test.py
 

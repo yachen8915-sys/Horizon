@@ -195,6 +195,84 @@ def test_semantic_dedup_merges_cross_platform_occurrences(monkeypatch) -> None:
     assert result[0].metadata["cross_platform_count"] == 2
 
 
+def test_semantic_dedup_keeps_provider_confirmation_separate_from_platforms(
+    monkeypatch,
+) -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.ai = AIConfig(
+        provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY"
+    )
+    dailyhot = make_item(
+        "dailyhot-topic", 9, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    dailyhot.metadata["platform_occurrences"] = [
+        {
+            "platform": "weibo",
+            "provider": "DailyHotAPI",
+            "rank": 2,
+            "url": "https://weibo.example/topic",
+        }
+    ]
+    alapi = make_item(
+        "alapi-topic", 8, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    alapi.metadata["platform_occurrences"] = [
+        {
+            "platform": "weibo",
+            "provider": "ALAPI",
+            "rank": 3,
+            "url": "https://alapi.example/topic",
+        }
+    ]
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            return '{"duplicates": [[0, 1]]}'
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([dailyhot, alapi], log=False)
+    )
+
+    assert len(result) == 1
+    assert result[0].metadata["platforms"] == ["weibo"]
+    assert result[0].metadata["providers"] == ["DailyHotAPI", "ALAPI"]
+    assert result[0].metadata["cross_platform_count"] == 1
+
+
+def test_platform_trends_share_dynamic_global_cap_with_ai_topics() -> None:
+    filtering = DigestConfig(max_items=25)
+    items = [
+        make_item(
+            f"trend-{index}",
+            10 - index / 100,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        )
+        for index in range(20)
+    ]
+    items.extend(
+        make_item(f"app-{index}", 9.9 - index / 100, "ai", "pangmen-topic-radar")
+        for index in range(20)
+    )
+
+    result = make_orchestrator(filtering).apply_balanced_digest(items)
+
+    assert len(result.items) == 25
+    trend_count = sum(
+        item.processing.classification.profile == "pangmen-platform-trend-radar"
+        for item in result.items
+    )
+    app_count = sum(
+        item.processing.classification.profile == "pangmen-topic-radar"
+        for item in result.items
+    )
+    assert trend_count > 6
+    assert app_count > 0
+    assert trend_count + app_count == 25
+
+
 def test_filter_items_skips_ai_topic_dedup_for_disabled_profile(monkeypatch) -> None:
     orchestrator = make_orchestrator(DigestConfig())
     orchestrator.profiles = ProfileRegistry.load(

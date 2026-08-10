@@ -48,6 +48,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           LWN_KEY: ${{ secrets.LWN_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
         run: uv run horizon --hours 24
 
