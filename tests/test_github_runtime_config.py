@@ -27,7 +27,7 @@ def test_workflow_keeps_manual_entry_without_github_native_schedule():
     assert "schedule:" not in workflow
 
 
-def test_github_runtime_config_enables_bounded_content_radars():
+def test_github_runtime_config_uses_dynamic_radar_mix_under_total_cap():
     config = json.loads(
         (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
             encoding="utf-8"
@@ -38,12 +38,8 @@ def test_github_runtime_config_enables_bounded_content_radars():
     assert settings["pangmen-topic-radar"]["threshold"] == 7.0
     assert settings["pangmen-ai-tech-radar"]["threshold"] == 7.0
     assert settings["pangmen-platform-trend-radar"]["threshold"] == 5.0
-    assert config["digest"]["profile_limits"] == {
-        "pangmen-topic-radar": 5,
-        "pangmen-ai-tech-radar": 3,
-        "pangmen-platform-trend-radar": 8,
-    }
-    assert config["digest"]["max_items"] == 20
+    assert config["digest"].get("profile_limits", {}) == {}
+    assert config["digest"]["max_items"] == 25
     assert config["sources"]["huggingface"]["enabled"] is True
 
     platform_providers = config["sources"]["platform_trends"]["providers"]
