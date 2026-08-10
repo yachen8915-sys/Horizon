@@ -20,7 +20,8 @@ def test_loads_builtin_profiles():
         "tech-blog",
         "finance-news",
         "pangmen-topic-radar",
-        "mining-market-radar",
+        "pangmen-ai-tech-radar",
+        "pangmen-platform-trend-radar",
     ):
         profile = registry.get(profile_id)
         assert profile.match_prompt
@@ -134,6 +135,50 @@ def test_pangmen_profile_does_not_request_demo_or_case_block():
         block.id for block in profile.definition.enrichment.blocks
     }
     assert "演示或案例建议" not in profile.enrichment_prompt
+
+
+def test_ai_tech_profile_rewards_capability_shifts_not_parameter_noise():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-ai-tech-radar")
+
+    assert "能力变化" in profile.analysis_prompt
+    assert "产品传导" in profile.analysis_prompt
+    assert "纯参数" in profile.analysis_prompt
+    assert "立即可用" not in profile.analysis_prompt
+    assert {block.id for block in profile.definition.enrichment.blocks} == {
+        "technical_change",
+        "why_important",
+        "capability_shift",
+        "product_impact",
+        "content_opportunity",
+        "priority",
+        "verification",
+    }
+
+
+def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-platform-trend-radar")
+
+    assert "关键词硬过滤" in profile.analysis_prompt
+    assert "热度证据" in profile.analysis_prompt
+    assert "全网爆火" in profile.analysis_prompt
+    assert "时效" in profile.analysis_prompt
+    assert "政治敏感" in profile.match_prompt
+    assert "娱乐" in profile.match_prompt
+    assert "无自然连接" in profile.analysis_prompt
+    assert "优先追" in profile.analysis_prompt
+    assert "优先追 / 追 / 观察 / 忽略" in profile.enrichment_prompt
+    assert {block.id for block in profile.definition.enrichment.blocks} == {
+        "what_happened",
+        "relevance",
+        "borrowing_angles",
+        "recommendation",
+        "risk",
+        "source_evidence",
+    }
 
 
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):

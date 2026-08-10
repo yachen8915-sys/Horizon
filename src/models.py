@@ -22,6 +22,8 @@ class SourceType(str, Enum):
     GOOGLE_NEWS = "google_news"
     BILIBILI = "bilibili"
     AIHOT = "aihot"
+    HUGGINGFACE = "huggingface"
+    PLATFORM_TRENDS = "platform_trends"
 
 
 class SourceDefinition(NamedTuple):
@@ -45,6 +47,10 @@ SOURCE_REGISTRY = {
     SourceType.GOOGLE_NEWS.value: SourceDefinition("google_news"),
     SourceType.BILIBILI.value: SourceDefinition("bilibili", item_fields=("queries",)),
     SourceType.AIHOT.value: SourceDefinition("aihot"),
+    SourceType.HUGGINGFACE.value: SourceDefinition("huggingface"),
+    SourceType.PLATFORM_TRENDS.value: SourceDefinition(
+        "platform_trends", item_fields=("providers",)
+    ),
 }
 
 ProfileRoute = Optional[Union[str, List[str]]]
@@ -470,6 +476,42 @@ class AIHotConfig(BaseModel):
     etag_file: str = "aihot_etags.json"
 
 
+class HuggingFaceConfig(BaseModel):
+    """Official Hugging Face model and Daily Papers discovery feeds."""
+
+    enabled: bool = False
+    fetch_models: bool = True
+    fetch_papers: bool = True
+    model_limit: int = Field(default=10, ge=1, le=50)
+    paper_limit: int = Field(default=10, ge=1, le=50)
+    model_min_trending_score: int = Field(default=1, ge=0)
+    paper_min_upvotes: int = Field(default=1, ge=0)
+    profile: ProfileRoute = "pangmen-ai-tech-radar"
+
+
+class PlatformTrendProviderConfig(BaseModel):
+    """One configurable public or third-party platform trend endpoint."""
+
+    enabled: bool = True
+    platform: Literal["weibo", "douyin", "xiaohongshu", "wechat"]
+    provider: str
+    base_url: Optional[HttpUrl] = None
+    source_id: Optional[str] = None
+    api_key_env: Optional[str] = None
+    api_key_header: str = "Authorization"
+    api_key_prefix: str = "Bearer"
+    fetch_limit: int = Field(default=20, ge=1, le=100)
+    rank_limit: int = Field(default=50, ge=1, le=100)
+    category: str = "platform-trend"
+    profile: ProfileRoute = "pangmen-platform-trend-radar"
+    reliability: str = "aggregator"
+
+
+class PlatformTrendsConfig(BaseModel):
+    enabled: bool = False
+    providers: List[PlatformTrendProviderConfig] = Field(default_factory=list)
+
+
 class SourcesConfig(BaseModel):
     """All sources configuration."""
 
@@ -485,6 +527,8 @@ class SourcesConfig(BaseModel):
     google_news: Optional[GoogleNewsConfig] = None
     bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
     aihot: AIHotConfig = Field(default_factory=AIHotConfig)
+    huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
+    platform_trends: PlatformTrendsConfig = Field(default_factory=PlatformTrendsConfig)
 
 
 class WebhookConfig(BaseModel):
@@ -652,7 +696,17 @@ class DigestConfig(BaseModel):
     category_groups: Dict[str, CategoryGroupConfig] = Field(default_factory=dict)
     default_group: str = "other"
     default_group_limit: Optional[int] = Field(default=None, gt=0)
+    profile_limits: Dict[str, int] = Field(default_factory=dict)
     profile_order: List[str] = Field(default_factory=list)
+
+    @field_validator("profile_limits")
+    @classmethod
+    def validate_profile_limits(cls, value: Dict[str, int]) -> Dict[str, int]:
+        if any(not profile_id.strip() for profile_id in value):
+            raise ValueError("digest.profile_limits keys must be non-empty strings")
+        if any(limit <= 0 for limit in value.values()):
+            raise ValueError("digest.profile_limits values must be greater than zero")
+        return value
 
     @field_validator("profile_order")
     @classmethod

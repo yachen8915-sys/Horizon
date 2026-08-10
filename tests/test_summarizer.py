@@ -348,6 +348,69 @@ def test_generate_summary_uses_configured_profile_order():
     assert result.index("## Technology Blog") < result.index("## Financial News")
 
 
+def test_generate_content_radar_summary_uses_two_public_radars_and_three_subsections():
+    app = _make_item(1)
+    app.profile = "pangmen-topic-radar"
+    app.processing.classification.profile = "pangmen-topic-radar"
+    tech = _make_item(2)
+    tech.profile = "pangmen-ai-tech-radar"
+    tech.processing.classification.profile = "pangmen-ai-tech-radar"
+    trend = _make_item(3)
+    trend.profile = "pangmen-platform-trend-radar"
+    trend.processing.classification.profile = "pangmen-platform-trend-radar"
+    summarizer = DailySummarizer(
+        profile_names={
+            "pangmen-topic-radar": {"zh": "AI 应用"},
+            "pangmen-ai-tech-radar": {"zh": "AI 技术"},
+            "pangmen-platform-trend-radar": {"zh": "平台运营热点"},
+        },
+        profile_order=[
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+            "pangmen-platform-trend-radar",
+        ],
+    )
+
+    result = _run_async(
+        summarizer.generate_summary(
+            [app, tech, trend],
+            date="2026-08-10",
+            total_fetched=100,
+            language="zh",
+        )
+    )
+
+    assert result.startswith("# 🔥 旁门每日内容雷达\n")
+    assert "## 🤖 今日 AI 资讯" in result
+    assert "### AI 应用" in result
+    assert "### AI 技术" in result
+    assert "## 🔥 今日运营热点" in result
+    assert result.index("### AI 应用") < result.index("### AI 技术")
+    assert result.index("### AI 技术") < result.index("## 🔥 今日运营热点")
+    assert "Horizon 每日速递" not in result
+    assert "从 100 条内容中筛选" not in result
+
+
+def test_empty_content_radar_does_not_fall_back_to_generic_horizon_summary():
+    summarizer = DailySummarizer(
+        profile_order=[
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+            "pangmen-platform-trend-radar",
+        ]
+    )
+
+    result = _run_async(
+        summarizer.generate_summary([], "2026-08-10", 80, language="zh")
+    )
+
+    assert result.startswith("# 🔥 旁门每日内容雷达\n")
+    assert "### AI 应用" in result
+    assert "### AI 技术" in result
+    assert "## 🔥 今日运营热点" in result
+    assert "Horizon 每日速递" not in result
+
+
 def test_generate_summary_renders_primary_block_before_source_without_heading():
     item = _make_item(1)
     item.processing.artifacts["en"] = ContentArtifact(

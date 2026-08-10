@@ -30,6 +30,8 @@ from .scrapers.gdelt import GDELTScraper
 from .scrapers.google_news import GoogleNewsScraper
 from .scrapers.bilibili import BilibiliScraper
 from .scrapers.aihot import AIHotScraper
+from .scrapers.huggingface import HuggingFaceScraper
+from .scrapers.platform_trends import PlatformTrendsScraper
 from .processing.engagement import EngagementTracker
 from .ai.client import create_ai_client
 from .ai.analyzer import ContentAnalyzer
@@ -81,6 +83,36 @@ def _deduplication_url_key(url: str) -> tuple[str, str, str, str, Optional[int],
         path,
         "&".join(query_parts),
     )
+
+
+def _merge_platform_occurrences(primary: ContentItem, other: ContentItem) -> None:
+    """Preserve per-platform evidence when duplicate trend items are merged."""
+    primary_rows = primary.metadata.get("platform_occurrences")
+    other_rows = other.metadata.get("platform_occurrences")
+    if not isinstance(primary_rows, list) and not isinstance(other_rows, list):
+        return
+
+    merged_rows: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for row in [*(primary_rows or []), *(other_rows or [])]:
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("platform") or ""), str(row.get("url") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_rows.append(row)
+
+    primary.metadata["platform_occurrences"] = merged_rows
+    platforms = list(
+        dict.fromkeys(
+            str(row.get("platform"))
+            for row in merged_rows
+            if row.get("platform")
+        )
+    )
+    primary.metadata["platforms"] = platforms
+    primary.metadata["cross_platform_count"] = len(platforms)
 
 
 @dataclass
@@ -514,6 +546,28 @@ class HorizonOrchestrator:
                 aihot_scraper = AIHotScraper(self.config.sources.aihot, client)
                 tasks.append(self._fetch_with_progress("AI HOT", aihot_scraper, since))
 
+            # Hugging Face public Hub models and daily papers.
+            if (
+                getattr(self.config.sources, "huggingface", None)
+                and self.config.sources.huggingface.enabled
+            ):
+                hf_scraper = HuggingFaceScraper(self.config.sources.huggingface, client)
+                tasks.append(
+                    self._fetch_with_progress("Hugging Face", hf_scraper, since)
+                )
+
+            # Configurable public platform trend providers. Each provider fails softly.
+            if (
+                getattr(self.config.sources, "platform_trends", None)
+                and self.config.sources.platform_trends.enabled
+            ):
+                trend_scraper = PlatformTrendsScraper(
+                    self.config.sources.platform_trends, client
+                )
+                tasks.append(
+                    self._fetch_with_progress("Platform Trends", trend_scraper, since)
+                )
+
             # Fetch all concurrently
             outcomes = await asyncio.gather(*tasks)
             self.last_fetch_report = FetchReport(outcomes=list(outcomes))
@@ -653,6 +707,7 @@ class HorizonOrchestrator:
                 for mk, mv in item.metadata.items():
                     if mk not in primary.metadata or not primary.metadata[mk]:
                         primary.metadata[mk] = mv
+                _merge_platform_occurrences(primary, item)
 
                 # Append content (e.g., comments from another source)
                 if item is not primary and item.content:
@@ -732,6 +787,7 @@ class HorizonOrchestrator:
                 if dup_idx == primary_idx:
                     continue
                 dup = items[dup_idx]
+                _merge_platform_occurrences(primary, dup)
                 # Merge comments/content from the duplicate into the primary
                 if dup.content:
                     if not primary.content or dup.content not in primary.content:
@@ -974,8 +1030,9 @@ class HorizonOrchestrator:
         digest = self.config.digest
         groups = digest.category_groups
         max_items = digest.max_items
+        profile_limits = digest.profile_limits
 
-        if not groups and max_items is None:
+        if not groups and max_items is None and not profile_limits:
             return BalancedDigestResult(items=items)
 
         sorted_items = sorted(
@@ -1008,6 +1065,7 @@ class HorizonOrchestrator:
 
         selected: List[tuple[ContentItem, str]] = []
         group_counts: Dict[str, int] = defaultdict(int)
+        profile_counts: Dict[str, int] = defaultdict(int)
         default_group = digest.default_group
 
         for item in sorted_items:
@@ -1026,8 +1084,22 @@ class HorizonOrchestrator:
             if limit is not None and group_counts[group_key] >= limit:
                 continue
 
+            profile_id = (
+                item.processing.classification.profile
+                if item.processing
+                else (
+                    item.profile
+                    if isinstance(item.profile, str)
+                    else ""
+                )
+            )
+            profile_limit = profile_limits.get(profile_id)
+            if profile_limit is not None and profile_counts[profile_id] >= profile_limit:
+                continue
+
             selected.append((item, group_key))
             group_counts[group_key] += 1
+            profile_counts[profile_id] += 1
 
         if max_items is not None:
             selected = selected[:max_items]

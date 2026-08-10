@@ -25,7 +25,12 @@ from src.orchestrator import HorizonOrchestrator
 from src.processing import ProfileRegistry
 
 
-def make_item(item_id: str, score: float, category: str | None) -> ContentItem:
+def make_item(
+    item_id: str,
+    score: float,
+    category: str | None,
+    profile: str = "tech-news",
+) -> ContentItem:
     metadata = {"category": category} if category is not None else {}
     return ContentItem(
         id=item_id,
@@ -34,10 +39,10 @@ def make_item(item_id: str, score: float, category: str | None) -> ContentItem:
         url=f"https://example.com/{item_id}",
         published_at=datetime.now(timezone.utc),
         metadata=metadata,
-        profile="tech-news",
+        profile=profile,
         processing=ProcessingResult(
             classification=ClassificationResult(
-                profile="tech-news", method="source_override"
+                profile=profile, method="source_override"
             ),
             analysis=ContentAnalysis(
                 score=score, reason="test", summary=item_id
@@ -128,6 +133,66 @@ def test_max_items_works_without_category_groups() -> None:
     result = make_orchestrator(filtering).apply_balanced_digest(items)
 
     assert [item.id for item in result.items] == ["higher"]
+
+
+def test_profile_limits_are_upper_bounds_not_fill_quotas() -> None:
+    filtering = DigestConfig(
+        profile_limits={
+            "pangmen-topic-radar": 2,
+            "pangmen-ai-tech-radar": 1,
+            "pangmen-platform-trend-radar": 2,
+        }
+    )
+    items = [
+        make_item("app-1", 10, "ai", "pangmen-topic-radar"),
+        make_item("app-2", 9, "ai", "pangmen-topic-radar"),
+        make_item("app-3", 8, "ai", "pangmen-topic-radar"),
+        make_item("tech-1", 7, "ai-tech", "pangmen-ai-tech-radar"),
+    ]
+
+    result = make_orchestrator(filtering).apply_balanced_digest(items)
+
+    assert [item.id for item in result.items] == ["app-1", "app-2", "tech-1"]
+    assert all(
+        item.processing.classification.profile != "pangmen-platform-trend-radar"
+        for item in result.items
+    )
+
+
+def test_semantic_dedup_merges_cross_platform_occurrences(monkeypatch) -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.ai = AIConfig(
+        provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY"
+    )
+    weibo = make_item(
+        "weibo-topic", 9, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    weibo.metadata["platform_occurrences"] = [
+        {"platform": "weibo", "rank": 2, "url": "https://weibo.example/topic"}
+    ]
+    douyin = make_item(
+        "douyin-topic", 8, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    douyin.metadata["platform_occurrences"] = [
+        {"platform": "douyin", "rank": 5, "url": "https://douyin.example/topic"}
+    ]
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            return '{"duplicates": [[0, 1]]}'
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([weibo, douyin], log=False)
+    )
+
+    assert len(result) == 1
+    assert [row["platform"] for row in result[0].metadata["platform_occurrences"]] == [
+        "weibo",
+        "douyin",
+    ]
+    assert result[0].metadata["cross_platform_count"] == 2
 
 
 def test_filter_items_skips_ai_topic_dedup_for_disabled_profile(monkeypatch) -> None:

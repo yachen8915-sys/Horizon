@@ -1168,6 +1168,100 @@ class TestSendDailySummary:
         assert "第 1/1 条" in panels[1]["elements"][0]["content"]
         del os.environ[_TEST_URL_ENV]
 
+    def test_feishu_collapsible_content_radar_uses_dual_radar_headings(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        notifier = WebhookNotifier(
+            WebhookConfig(
+                enabled=True,
+                url_env=_TEST_URL_ENV,
+                platform="feishu",
+                layout="collapsible",
+            )
+        )
+        summarizer = DailySummarizer(
+            profile_names={
+                "pangmen-topic-radar": {"zh": "AI 应用"},
+                "pangmen-ai-tech-radar": {"zh": "AI 技术"},
+                "pangmen-platform-trend-radar": {"zh": "平台运营热点"},
+            },
+            profile_order=[
+                "pangmen-topic-radar",
+                "pangmen-ai-tech-radar",
+                "pangmen-platform-trend-radar",
+            ],
+        )
+        app = _make_item(title="AI 应用")
+        app.profile = "pangmen-topic-radar"
+        app.processing.classification.profile = "pangmen-topic-radar"
+        tech = _make_item(title="AI 技术", url="https://example.com/tech")
+        tech.profile = "pangmen-ai-tech-radar"
+        tech.processing.classification.profile = "pangmen-ai-tech-radar"
+        trend = _make_item(title="平台热点", url="https://example.com/trend")
+        trend.profile = "pangmen-platform-trend-radar"
+        trend.processing.classification.profile = "pangmen-platform-trend-radar"
+
+        message = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=[app, tech, trend],
+            all_items_count=50,
+            date="2026-08-10",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+
+        assert message["message_title"] == "旁门每日内容雷达 · 2026-08-10"
+        elements = message["_request_body_override"]["card"]["body"]["elements"]
+        headings = [
+            element["content"] for element in elements if element["tag"] == "markdown"
+        ]
+        assert headings == [
+            "点击下方面板即可展开阅读全文",
+            "## 🤖 今日 AI 资讯",
+            "### AI 应用",
+            "### AI 技术",
+            "## 🔥 今日运营热点",
+        ]
+        assert all("Horizon" not in heading for heading in headings)
+        del os.environ[_TEST_URL_ENV]
+
+    def test_feishu_empty_content_radar_keeps_pangmen_title(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        notifier = WebhookNotifier(
+            WebhookConfig(
+                enabled=True,
+                url_env=_TEST_URL_ENV,
+                platform="feishu",
+                layout="collapsible",
+            )
+        )
+        summarizer = DailySummarizer(
+            profile_order=[
+                "pangmen-topic-radar",
+                "pangmen-ai-tech-radar",
+                "pangmen-platform-trend-radar",
+            ]
+        )
+
+        message = notifier.build_daily_summary_messages(
+            summary="",
+            important_items=[],
+            all_items_count=80,
+            date="2026-08-10",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+
+        assert message["message_title"] == "旁门每日内容雷达 · 2026-08-10"
+        elements = message["_request_body_override"]["card"]["body"]["elements"]
+        markdown = [
+            element["content"] for element in elements if element["tag"] == "markdown"
+        ]
+        assert markdown[0] == "今日暂无达到筛选标准的重要更新。"
+        assert "## 🤖 今日 AI 资讯" in markdown
+        assert "## 🔥 今日运营热点" in markdown
+        assert all("Horizon" not in block for block in markdown)
+        del os.environ[_TEST_URL_ENV]
+
     def test_summary_and_items_keeps_global_and_profile_local_positions(self):
         os.environ[_TEST_URL_ENV] = _TEST_URL
         config = WebhookConfig(

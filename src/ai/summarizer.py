@@ -16,6 +16,15 @@ _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()<>#!|])")
 _MARKDOWN_BLOCK_START = re.compile(r"(?m)^( {0,3})(>|[-+] |\d+[.)] )")
 _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
 TOPIC_RADAR_PROFILE_ID = "pangmen-topic-radar"
+AI_TECH_RADAR_PROFILE_ID = "pangmen-ai-tech-radar"
+PLATFORM_TREND_RADAR_PROFILE_ID = "pangmen-platform-trend-radar"
+CONTENT_RADAR_PROFILE_IDS = frozenset(
+    {
+        TOPIC_RADAR_PROFILE_ID,
+        AI_TECH_RADAR_PROFILE_ID,
+        PLATFORM_TREND_RADAR_PROFILE_ID,
+    }
+)
 TOPIC_RADAR_HIDDEN_BLOCK_IDS = frozenset(
     {"content_format", "demo_or_case", "priority_reason", "verification"}
 )
@@ -233,6 +242,22 @@ class DailySummarizer:
         """
         labels = LABELS.get(language, LABELS["en"])
 
+        if (
+            not items
+            and language == "zh"
+            and any(
+                profile_id
+                in {AI_TECH_RADAR_PROFILE_ID, PLATFORM_TREND_RADAR_PROFILE_ID}
+                for profile_id in self.profile_order
+            )
+        ):
+            return self._generate_pangmen_content_radar(
+                DailySummaryView(groups=[], item_count=0),
+                date=date,
+                total_fetched=total_fetched,
+                language=language,
+            )
+
         if not items:
             return self._generate_empty_summary(date, total_fetched, labels)
 
@@ -242,6 +267,24 @@ class DailySummarizer:
             and len(view.groups) == 1
             and view.groups[0].profile_id == TOPIC_RADAR_PROFILE_ID
         )
+        content_radar_mode = (
+            language == "zh"
+            and any(
+                group.profile_id
+                in {AI_TECH_RADAR_PROFILE_ID, PLATFORM_TREND_RADAR_PROFILE_ID}
+                for group in view.groups
+            )
+            and all(
+                group.profile_id in CONTENT_RADAR_PROFILE_IDS for group in view.groups
+            )
+        )
+        if content_radar_mode:
+            return self._generate_pangmen_content_radar(
+                view,
+                date=date,
+                total_fetched=total_fetched,
+                language=language,
+            )
         if topic_card_mode:
             header = (
                 f"# 旁门左道PPT · 新媒体选题雷达 - {date}\n\n"
@@ -320,6 +363,67 @@ class DailySummarizer:
 
         toc = "\n\n".join(toc_sections) + "\n\n---\n\n"
         return normalize_language(header + toc + "".join(body_sections), language)
+
+    def _generate_pangmen_content_radar(
+        self,
+        view: DailySummaryView,
+        *,
+        date: str,
+        total_fetched: int,
+        language: str,
+    ) -> str:
+        """Render the two user-facing Pangmen radars from three internal profiles."""
+        labels = LABELS["zh"]
+        groups = {group.profile_id: group for group in view.groups}
+        parts = [
+            "# 🔥 旁门每日内容雷达\n\n",
+            f"> 日期：{date}\n\n",
+            "## 🤖 今日 AI 资讯\n\n",
+        ]
+
+        for profile_id, heading in (
+            (TOPIC_RADAR_PROFILE_ID, "AI 应用"),
+            (AI_TECH_RADAR_PROFILE_ID, "AI 技术"),
+        ):
+            parts.append(f"### {heading}\n\n")
+            group = groups.get(profile_id)
+            if not group:
+                parts.append("今日暂无达到筛选标准的重要更新。\n\n")
+                continue
+            for view_item in group.items:
+                parts.append(
+                    self._format_item(
+                        view_item.item,
+                        labels,
+                        language,
+                        view_item.index,
+                        heading_level=4,
+                        anchor_id=view_item.anchor_id,
+                        title_override=view_item.title,
+                        score_override=view_item.score,
+                        topic_card=profile_id == TOPIC_RADAR_PROFILE_ID,
+                    )
+                )
+
+        parts.append("## 🔥 今日运营热点\n\n")
+        trend_group = groups.get(PLATFORM_TREND_RADAR_PROFILE_ID)
+        if not trend_group:
+            parts.append("今日暂无达到筛选标准的平台运营热点。\n")
+        else:
+            for view_item in trend_group.items:
+                parts.append(
+                    self._format_item(
+                        view_item.item,
+                        labels,
+                        language,
+                        view_item.index,
+                        heading_level=3,
+                        anchor_id=view_item.anchor_id,
+                        title_override=view_item.title,
+                        score_override=view_item.score,
+                    )
+                )
+        return normalize_language("".join(parts).rstrip() + "\n", language)
 
     def generate_webhook_overview(
         self,

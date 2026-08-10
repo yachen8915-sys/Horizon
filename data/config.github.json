@@ -32,6 +32,14 @@
       "pangmen-topic-radar": {
         "threshold": 7.0,
         "topic_dedup": true
+      },
+      "pangmen-ai-tech-radar": {
+        "threshold": 7.0,
+        "topic_dedup": true
+      },
+      "pangmen-platform-trend-radar": {
+        "threshold": 5.0,
+        "topic_dedup": true
       }
     }
   },
@@ -204,6 +212,20 @@
         "url": "https://news.google.com/rss/search?q=%28site%3Aanthropic.com%2Fnews+OR+site%3Ablog.adobe.com+OR+site%3Acanva.com%2Fnewsroom+OR+site%3Acursor.com%2Fchangelog+OR+site%3Atherundown.ai+OR+site%3Afuturetools.io%29+AI&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
         "enabled": true,
         "category": "official-and-overseas-index",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "Google News - AI Capability and Model Releases",
+        "url": "https://news.google.com/rss/search?q=%28site%3Aopenai.com+OR+site%3Aanthropic.com+OR+site%3Adeepmind.google+OR+site%3Ahuggingface.co%29+%28model+OR+multimodal+OR+agent+OR+reasoning+OR+release%29&hl=en-US&gl=US&ceid=US%3Aen",
+        "enabled": true,
+        "category": "ai-tech-official-index",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "name": "Google News - AI Productivity Product Updates",
+        "url": "https://news.google.com/rss/search?q=%28AI+OR+agent%29+%28office+OR+presentation+OR+document+OR+video+OR+design+OR+coding%29+%28launch+OR+update+OR+free+OR+available%29&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+        "enabled": true,
+        "category": "ai-application-index",
         "profile": "pangmen-topic-radar"
       },
       {
@@ -422,6 +444,63 @@
       "limit": 100,
       "request_interval_seconds": 1.0,
       "etag_file": "aihot_etags.json"
+    },
+    "huggingface": {
+      "enabled": true,
+      "fetch_models": true,
+      "fetch_papers": true,
+      "model_limit": 10,
+      "paper_limit": 10,
+      "model_min_trending_score": 1,
+      "paper_min_upvotes": 5,
+      "profile": "pangmen-ai-tech-radar"
+    },
+    "platform_trends": {
+      "enabled": true,
+      "providers": [
+        {
+          "enabled": true,
+          "platform": "weibo",
+          "provider": "dailyhotapi_public_instance",
+          "base_url": "https://dailyhotapi.vercel.app/weibo",
+          "fetch_limit": 30,
+          "rank_limit": 30,
+          "category": "platform-trend",
+          "profile": "pangmen-platform-trend-radar",
+          "reliability": "aggregator_experimental"
+        },
+        {
+          "enabled": true,
+          "platform": "douyin",
+          "provider": "dailyhotapi_public_instance",
+          "base_url": "https://dailyhotapi.vercel.app/douyin",
+          "fetch_limit": 30,
+          "rank_limit": 30,
+          "category": "platform-trend",
+          "profile": "pangmen-platform-trend-radar",
+          "reliability": "aggregator_experimental"
+        },
+        {
+          "enabled": false,
+          "platform": "xiaohongshu",
+          "provider": "external_public_provider_required",
+          "fetch_limit": 20,
+          "rank_limit": 20,
+          "category": "platform-trend",
+          "profile": "pangmen-platform-trend-radar",
+          "reliability": "unverified"
+        },
+        {
+          "enabled": false,
+          "platform": "wechat",
+          "provider": "external_public_provider_required",
+          "fetch_limit": 20,
+          "rank_limit": 20,
+          "category": "platform-trend",
+          "profile": "pangmen-platform-trend-radar",
+          "reliability": "unverified"
+        }
+      ]
     }
   },
   "collection": {
@@ -464,9 +543,16 @@
     }
   },
   "digest": {
-    "max_items": null,
+    "max_items": 20,
+    "profile_limits": {
+      "pangmen-topic-radar": 5,
+      "pangmen-ai-tech-radar": 3,
+      "pangmen-platform-trend-radar": 8
+    },
     "profile_order": [
       "pangmen-topic-radar",
+      "pangmen-ai-tech-radar",
+      "pangmen-platform-trend-radar",
       "tech-news",
       "tech-blog",
       "finance-news"

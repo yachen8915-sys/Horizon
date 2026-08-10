@@ -1,0 +1,26 @@
+{
+  "id": "pangmen-ai-tech-radar",
+  "name": "Pangmen AI Technology Radar",
+  "display_names": {
+    "zh": "AI 技术"
+  },
+  "match": "match.md",
+  "analysis": "analysis.md",
+  "content": {
+    "analysis_max_chars": 5000,
+    "enrichment_max_chars": 9000,
+    "sampling": "head-middle-tail"
+  },
+  "enrichment": {
+    "prompt": "enrichment.md",
+    "blocks": [
+      {"id": "technical_change", "type": "section", "tools": [], "primary": true},
+      {"id": "why_important", "type": "section", "tools": []},
+      {"id": "capability_shift", "type": "section", "tools": []},
+      {"id": "product_impact", "type": "section", "tools": []},
+      {"id": "content_opportunity", "type": "section", "tools": []},
+      {"id": "priority", "type": "section", "tools": []},
+      {"id": "verification", "type": "section", "tools": ["web_search"]}
+    ]
+  }
+}

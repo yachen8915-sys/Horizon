@@ -139,6 +139,17 @@ def test_mcp_filter_and_reporting_support_every_registered_source() -> None:
                         "queries": [{"query": "AI", "author": "AI Creator"}],
                     },
                     "aihot": {"enabled": True},
+                    "huggingface": {"enabled": True},
+                    "platform_trends": {
+                        "enabled": True,
+                        "providers": [
+                            {
+                                "platform": "douyin",
+                                "provider": "fixture",
+                                "base_url": "https://example.com/trends",
+                            }
+                        ],
+                    },
             },
         }
     )

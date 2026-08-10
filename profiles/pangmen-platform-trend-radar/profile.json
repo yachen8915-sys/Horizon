@@ -1,0 +1,25 @@
+{
+  "id": "pangmen-platform-trend-radar",
+  "name": "Pangmen Platform Operations Trend Radar",
+  "display_names": {
+    "zh": "平台运营热点"
+  },
+  "match": "match.md",
+  "analysis": "analysis.md",
+  "content": {
+    "analysis_max_chars": 4000,
+    "enrichment_max_chars": 8000,
+    "sampling": "head-middle-tail"
+  },
+  "enrichment": {
+    "prompt": "enrichment.md",
+    "blocks": [
+      {"id": "what_happened", "type": "section", "tools": [], "primary": true},
+      {"id": "relevance", "type": "section", "tools": []},
+      {"id": "borrowing_angles", "type": "section", "tools": []},
+      {"id": "recommendation", "type": "section", "tools": []},
+      {"id": "risk", "type": "section", "tools": [], "optional": true},
+      {"id": "source_evidence", "type": "section", "tools": []}
+    ]
+  }
+}

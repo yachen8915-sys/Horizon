@@ -48,6 +48,9 @@ def make_sources(**overrides):  # type: ignore[no-untyped-def]
         "gdelt": None,
         "google_news": None,
         "bilibili": SimpleNamespace(enabled=False),
+        "aihot": SimpleNamespace(enabled=False),
+        "huggingface": SimpleNamespace(enabled=False),
+        "platform_trends": SimpleNamespace(enabled=False),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -76,6 +79,47 @@ def test_bilibili_source_is_wired_into_fetch_reporting(monkeypatch) -> None:
     assert items == [kept]
     assert orchestrator.last_fetch_report is not None
     assert orchestrator.last_fetch_report.outcomes[0].source_name == "Bilibili"
+
+
+def test_content_radar_sources_are_wired_into_fetch_reporting(monkeypatch) -> None:
+    orchestrator = make_orchestrator()
+    hf_item = ContentItem(
+        id="huggingface:model:test",
+        source_type=SourceType.HUGGINGFACE,
+        title="model",
+        url="https://huggingface.co/test",
+        published_at=SINCE,
+    )
+    trend_item = ContentItem(
+        id="platform_trends:newsnow:weibo:test",
+        source_type=SourceType.PLATFORM_TRENDS,
+        title="trend",
+        url="https://example.com/trend",
+        published_at=SINCE,
+    )
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        sources=make_sources(
+            huggingface=SimpleNamespace(enabled=True),
+            platform_trends=SimpleNamespace(enabled=True),
+        ),
+        extractors={},
+    )
+    monkeypatch.setattr(
+        "src.orchestrator.HuggingFaceScraper",
+        lambda config, client: StubScraper([hf_item]),
+    )
+    monkeypatch.setattr(
+        "src.orchestrator.PlatformTrendsScraper",
+        lambda config, client: StubScraper([trend_item]),
+    )
+
+    items = asyncio.run(orchestrator.fetch_all_sources(SINCE))
+
+    assert items == [hf_item, trend_item]
+    assert [outcome.source_name for outcome in orchestrator.last_fetch_report.outcomes] == [
+        "Hugging Face",
+        "Platform Trends",
+    ]
 
 
 class StubScraper:
