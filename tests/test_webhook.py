@@ -1281,8 +1281,9 @@ class TestSendDailySummary:
             "## 🤖 今日 AI 资讯",
             "### AI 应用",
             "### AI 技术",
-            "## 🔥 今日可借势热点",
-            "## 👀 今日大盘热点观察",
+            "## 🔥 今日运营热点",
+            "### 今日可借势",
+            "### 今日大盘观察",
         ]
         assert all("Horizon" not in heading for heading in headings)
         panels = [
@@ -1330,8 +1331,9 @@ class TestSendDailySummary:
         ]
         assert markdown[0] == "今日暂无达到筛选标准的重要更新。"
         assert "## 🤖 今日 AI 资讯" in markdown
-        assert "## 🔥 今日可借势热点" in markdown
-        assert "## 👀 今日大盘热点观察" in markdown
+        assert "## 🔥 今日运营热点" in markdown
+        assert "### 今日可借势" in markdown
+        assert "### 今日大盘观察" in markdown
         assert all("Horizon" not in block for block in markdown)
         del os.environ[_TEST_URL_ENV]
 

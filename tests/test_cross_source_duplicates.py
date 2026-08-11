@@ -1,6 +1,15 @@
+import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from src.models import ContentItem, SourceType
+from src.models import (
+    AIConfig,
+    ClassificationResult,
+    ContentAnalysis,
+    ContentItem,
+    ProcessingResult,
+    SourceType,
+)
 from src.orchestrator import HorizonOrchestrator
 
 
@@ -167,3 +176,52 @@ def test_candidate_profile_routes_are_hashable_and_preserve_route_distinctions()
     assert len(result) == 2
     assert result[0].metadata["merged_sources"] == ["rss", "telegram"]
     assert result[1].id == "different-order"
+
+
+def test_platform_change_same_event_from_official_and_search_urls_merges_semantically(
+    monkeypatch,
+) -> None:
+    official = item(
+        "official-page-diff",
+        "https://open.douyin.com/rules/creator",
+        source_type=SourceType.PLATFORM_CHANGES,
+        profile="pangmen-platform-change-radar",
+        metadata={"platform": "douyin", "discovery_mode": "page_diff"},
+    )
+    search = item(
+        "search-republication",
+        "https://news.example/douyin-creator-rule",
+        source_type=SourceType.PLATFORM_CHANGES,
+        profile="pangmen-platform-change-radar",
+        metadata={"platform": "douyin", "discovery_mode": "search_rss"},
+    )
+    for candidate, score in ((official, 9), (search, 8)):
+        candidate.processing = ProcessingResult(
+            classification=ClassificationResult(
+                profile="pangmen-platform-change-radar", method="source_override"
+            ),
+            analysis=ContentAnalysis(
+                score=score,
+                reason="抖音创作者门槛由100粉丝调整为500粉丝",
+                summary="抖音调整同一项创作者发布门槛。",
+                tags=["抖音", "创作者规则"],
+            ),
+        )
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert "official-page-diff" in kwargs["user"]
+            assert "search-republication" in kwargs["user"]
+            return '{"duplicates": [[0, 1]]}'
+
+    orchestrator = object.__new__(HorizonOrchestrator)
+    orchestrator.config = SimpleNamespace(
+        ai=AIConfig(provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY")
+    )
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([official, search], log=False)
+    )
+
+    assert [candidate.id for candidate in result] == ["official-page-diff"]

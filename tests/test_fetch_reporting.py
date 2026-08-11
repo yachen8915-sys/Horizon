@@ -51,6 +51,7 @@ def make_sources(**overrides):  # type: ignore[no-untyped-def]
         "aihot": SimpleNamespace(enabled=False),
         "huggingface": SimpleNamespace(enabled=False),
         "platform_trends": SimpleNamespace(enabled=False),
+        "platform_changes": SimpleNamespace(enabled=False),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -120,6 +121,31 @@ def test_content_radar_sources_are_wired_into_fetch_reporting(monkeypatch) -> No
         "Hugging Face",
         "Platform Trends",
     ]
+
+
+def test_platform_change_source_is_independent_from_existing_radars(monkeypatch) -> None:
+    orchestrator = make_orchestrator()
+    change_item = ContentItem(
+        id="platform_changes:page_diff:test",
+        source_type=SourceType.PLATFORM_CHANGES,
+        title="规则变化",
+        url="https://example.com/change",
+        published_at=SINCE,
+        profile="pangmen-platform-change-radar",
+    )
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        sources=make_sources(platform_changes=SimpleNamespace(enabled=True)),
+        extractors={},
+    )
+    monkeypatch.setattr(
+        "src.orchestrator.PlatformChangesScraper",
+        lambda config, client: StubScraper([change_item]),
+    )
+
+    items = asyncio.run(orchestrator.fetch_all_sources(SINCE))
+
+    assert items == [change_item]
+    assert orchestrator.last_fetch_report.outcomes[0].source_name == "Platform Changes"
 
 
 class StubScraper:

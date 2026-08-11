@@ -4,7 +4,14 @@ from datetime import datetime, timezone
 from enum import Enum
 import re
 from typing import Annotated, Literal, Optional, List, Dict, Any, NamedTuple, Union
-from pydantic import BaseModel, ConfigDict, HttpUrl, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    HttpUrl,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class SourceType(str, Enum):
@@ -24,6 +31,7 @@ class SourceType(str, Enum):
     AIHOT = "aihot"
     HUGGINGFACE = "huggingface"
     PLATFORM_TRENDS = "platform_trends"
+    PLATFORM_CHANGES = "platform_changes"
 
 
 class SourceDefinition(NamedTuple):
@@ -51,6 +59,9 @@ SOURCE_REGISTRY = {
     SourceType.PLATFORM_TRENDS.value: SourceDefinition(
         "platform_trends", item_fields=("providers",)
     ),
+    SourceType.PLATFORM_CHANGES.value: SourceDefinition(
+        "platform_changes", item_fields=("watchers",)
+    ),
 }
 
 ProfileRoute = Optional[Union[str, List[str]]]
@@ -76,6 +87,17 @@ class ContentAnalysis(BaseModel):
         default=None, ge=0, le=10, allow_inf_nan=False
     )
     operations_reason: Optional[str] = None
+    is_platform_change: Optional[bool] = None
+    platform: Optional[Literal["douyin", "xiaohongshu", "bilibili", "wechat"]] = None
+    change_types: List[
+        Literal["operation", "ecommerce", "feature", "rule"]
+    ] = Field(default_factory=list)
+    source_level: Optional[
+        Literal["official", "official_republished", "secondary", "unverified"]
+    ] = None
+    affected_audience: List[str] = Field(default_factory=list)
+    impact_level: Optional[Literal["high", "medium", "low", "unknown"]] = None
+    change_status: Optional[str] = None
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
@@ -542,6 +564,67 @@ class PlatformTrendsConfig(BaseModel):
     providers: List[PlatformTrendProviderConfig] = Field(default_factory=list)
 
 
+class PlatformChangeWatcherConfig(BaseModel):
+    """One public platform page or Google News discovery watcher."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    mode: Literal["index", "page_diff", "search_rss"]
+    platform: Literal["douyin", "xiaohongshu", "bilibili", "wechat"]
+    enabled: bool = True
+    url: Optional[HttpUrl] = None
+    query: Optional[str] = None
+    same_domain_only: bool = True
+    include_patterns: List[str] = Field(default_factory=list)
+    exclude_patterns: List[str] = Field(default_factory=list)
+    ignore_patterns: List[str] = Field(default_factory=list)
+    fetch_limit: int = Field(default=20, ge=1, le=100)
+    min_content_chars: int = Field(default=80, ge=1, le=100_000)
+    change_types: List[
+        Literal["operation", "ecommerce", "feature", "rule"]
+    ] = Field(default_factory=list)
+    source_level: Literal[
+        "official", "official_republished", "secondary", "unverified"
+    ] = "secondary"
+    attribution_keywords: List[str] = Field(default_factory=list)
+    official_domains: List[str] = Field(default_factory=list)
+    language: str = "zh-CN"
+    country: str = "CN"
+    ceid: Optional[str] = "CN:zh-Hans"
+    observed_timezone: str = "Asia/Shanghai"
+    category: str = "platform-change"
+    profile: ProfileRoute = "pangmen-platform-change-radar"
+
+    @model_validator(mode="after")
+    def validate_mode_inputs(self) -> "PlatformChangeWatcherConfig":
+        if self.mode in {"index", "page_diff"} and self.url is None:
+            raise ValueError(f"platform change watcher mode {self.mode} requires url")
+        if self.mode == "search_rss" and not (self.query or "").strip():
+            raise ValueError("platform change watcher mode search_rss requires query")
+        if len(self.change_types) != len(set(self.change_types)):
+            raise ValueError("platform change watcher change_types must be unique")
+        return self
+
+
+class PlatformChangesConfig(BaseModel):
+    """Stable public-source platform change monitoring configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    lookback_days: int = Field(default=7, ge=1, le=30)
+    state_file: str = "data/platform_change_state.json"
+    watchers: List[PlatformChangeWatcherConfig] = Field(default_factory=list)
+
+    @field_validator("state_file")
+    @classmethod
+    def validate_state_file(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("platform_changes.state_file cannot be empty")
+        return value
+
+
 class SourcesConfig(BaseModel):
     """All sources configuration."""
 
@@ -559,6 +642,7 @@ class SourcesConfig(BaseModel):
     aihot: AIHotConfig = Field(default_factory=AIHotConfig)
     huggingface: HuggingFaceConfig = Field(default_factory=HuggingFaceConfig)
     platform_trends: PlatformTrendsConfig = Field(default_factory=PlatformTrendsConfig)
+    platform_changes: PlatformChangesConfig = Field(default_factory=PlatformChangesConfig)
 
 
 class WebhookConfig(BaseModel):

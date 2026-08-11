@@ -40,6 +40,10 @@
       "pangmen-platform-trend-radar": {
         "threshold": 7.0,
         "topic_dedup": true
+      },
+      "pangmen-platform-change-radar": {
+        "threshold": 7.0,
+        "topic_dedup": true
       }
     }
   },
@@ -625,6 +629,93 @@
           "reliability": "unverified"
         }
       ]
+    },
+    "platform_changes": {
+      "enabled": true,
+      "lookback_days": 7,
+      "state_file": "data/platform_change_state.json",
+      "watchers": [
+        {
+          "name": "douyin-open-platform-operation-standard",
+          "mode": "page_diff",
+          "platform": "douyin",
+          "url": "https://open.douyin.com/platform/resource/docs/operation-standard/operation-standard",
+          "change_types": ["operation", "rule"],
+          "source_level": "official",
+          "min_content_chars": 500,
+          "ignore_patterns": ["诚邀您对本文档易读易用性进行评价", "好用\\s*不好用"]
+        },
+        {
+          "name": "douyin-public-search",
+          "mode": "search_rss",
+          "platform": "douyin",
+          "query": "(site:open.douyin.com OR site:school.jinritemai.com) (抖音 OR 抖音电商) (公告 OR 规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 创作者 OR 功能)",
+          "change_types": ["operation", "ecommerce", "feature", "rule"],
+          "source_level": "secondary",
+          "official_domains": ["open.douyin.com", "school.jinritemai.com"],
+          "fetch_limit": 30
+        },
+        {
+          "name": "xiaohongshu-public-index",
+          "mode": "index",
+          "platform": "xiaohongshu",
+          "url": "https://school.xiaohongshu.com/newhome",
+          "include_patterns": ["helper/detail|规则|薯规|电商资讯|买手|直播|营销工具"],
+          "exclude_patterns": ["新商如何|怎么起号|商家案例|直播课"],
+          "fetch_limit": 30,
+          "change_types": ["operation", "ecommerce", "feature", "rule"],
+          "source_level": "official"
+        },
+        {
+          "name": "xiaohongshu-public-search",
+          "mode": "search_rss",
+          "platform": "xiaohongshu",
+          "query": "site:school.xiaohongshu.com (小红书 OR 薯规) (规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 电商资讯 OR 功能)",
+          "change_types": ["operation", "ecommerce", "feature", "rule"],
+          "source_level": "secondary",
+          "official_domains": ["school.xiaohongshu.com"],
+          "fetch_limit": 30
+        },
+        {
+          "name": "bilibili-community-convention",
+          "mode": "page_diff",
+          "platform": "bilibili",
+          "url": "https://member.bilibili.com/studio/convention/",
+          "change_types": ["operation", "rule"],
+          "source_level": "official",
+          "min_content_chars": 500
+        },
+        {
+          "name": "bilibili-public-search",
+          "mode": "search_rss",
+          "platform": "bilibili",
+          "query": "(site:bilibili.com/opus OR site:member.bilibili.com) (哔哩哔哩创作中心 OR 哔哩哔哩UP主服务中心 OR B站) (公告 OR 规则 OR 功能 OR 更新 OR 上线 OR 创作者)",
+          "change_types": ["operation", "feature", "rule"],
+          "source_level": "secondary",
+          "official_domains": ["member.bilibili.com", "bilibili.com"],
+          "fetch_limit": 30
+        },
+        {
+          "name": "wechat-store-public-doc",
+          "mode": "page_diff",
+          "platform": "wechat",
+          "url": "https://developers.weixin.qq.com/doc/store/shop",
+          "change_types": ["ecommerce", "feature", "rule"],
+          "source_level": "official",
+          "min_content_chars": 300
+        },
+        {
+          "name": "wechat-public-search",
+          "mode": "search_rss",
+          "platform": "wechat",
+          "query": "(微信公开课 OR 微信派) (视频号 OR 微信小店) (更新 OR 上线 OR 新增 OR 规则 OR 调整 OR 带货 OR 创作者 OR 功能)",
+          "change_types": ["operation", "ecommerce", "feature", "rule"],
+          "source_level": "official_republished",
+          "attribution_keywords": ["微信公开课", "微信派"],
+          "official_domains": ["weixin.qq.com", "developers.weixin.qq.com"],
+          "fetch_limit": 30
+        }
+      ]
     }
   },
   "collection": {
@@ -671,7 +762,8 @@
     "profile_limits": {
       "pangmen-topic-radar": 12,
       "pangmen-ai-tech-radar": 5,
-      "pangmen-platform-trend-radar": 8
+      "pangmen-platform-trend-radar": 8,
+      "pangmen-platform-change-radar": 5
     },
     "platform_trend_leverage_limit": 6,
     "platform_trend_watch_limit": 4,
@@ -679,6 +771,7 @@
       "pangmen-topic-radar",
       "pangmen-ai-tech-radar",
       "pangmen-platform-trend-radar",
+      "pangmen-platform-change-radar",
       "tech-news",
       "tech-blog",
       "finance-news"

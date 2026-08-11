@@ -252,6 +252,38 @@ class ContentAnalyzer:
                     "content_opportunity_score": content_opportunity_score,
                 }
             )
+        elif profile.id == "pangmen-platform-change-radar":
+            source_level = str(
+                item.metadata.get("source_level") or result.source_level or "unverified"
+            )
+            score = result.score
+            if source_level == "secondary":
+                score = min(score, 6.0)
+            elif source_level == "unverified":
+                score = min(score, 4.0)
+            if result.is_platform_change is False:
+                score = min(score, 4.0)
+
+            change_time_unconfirmed = (
+                item.metadata.get("discovery_mode") == "search_rss"
+                and item.metadata.get("change_time_confidence") != "explicit"
+            )
+            if change_time_unconfirmed:
+                score = min(score, 6.0)
+
+            platform = item.metadata.get("platform") or result.platform
+            change_types = item.metadata.get("change_types") or result.change_types
+            updates = {
+                "score": score,
+                "source_level": source_level,
+                "platform": platform,
+                "change_types": list(change_types),
+            }
+            if source_level in {"secondary", "unverified"}:
+                updates["change_status"] = "待确认（二手线索）"
+            if change_time_unconfirmed:
+                updates["change_status"] = "实际变化时间待确认"
+            result = result.model_copy(update=updates)
 
         if item.processing:
             item.processing.analysis = result

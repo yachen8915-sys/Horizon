@@ -47,6 +47,15 @@ jobs:
       - name: Prepare GitHub Actions config
         run: cp data/config.github.json data/config.json
 
+      - name: Restore platform change state
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        uses: actions/cache/restore@v4
+        with:
+          path: data/platform_change_state.json
+          key: platform-change-state-${{ github.run_id }}
+          restore-keys: |
+            platform-change-state-
+
       - name: Run Horizon
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
@@ -62,6 +71,13 @@ jobs:
           HORIZON_WEBHOOK_NOT_BEFORE_LOCAL: "10:00"
           HORIZON_WEBHOOK_TIMEZONE: "Asia/Shanghai"
         run: uv run horizon --hours 24
+
+      - name: Save platform change state
+        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full') && hashFiles('data/platform_change_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/platform_change_state.json
+          key: platform-change-state-${{ github.run_id }}
 
       - name: Send webhook connectivity test
         if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'webhook_test'

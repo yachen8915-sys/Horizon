@@ -221,6 +221,23 @@ def item_context(
         else ""
     )
     comments = parts.comments[:2000] if include_content else ""
+    metadata_section = ""
+    if profile.id == "pangmen-platform-change-radar":
+        keys = (
+            "platform",
+            "change_types",
+            "source_level",
+            "source_attribution",
+            "discovery_mode",
+            "watcher",
+            "changed_at",
+            "diff_excerpt",
+        )
+        metadata = {key: item.metadata[key] for key in keys if key in item.metadata}
+        metadata_section = (
+            "\nPlatform change metadata: "
+            + json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        )
     return f"""# Item
 
 Title: {item.title}
@@ -230,6 +247,7 @@ Author: {item.author or "Unknown"}
 Analysis summary: {analysis.summary if analysis else ""}
 Analysis reason: {analysis.reason if analysis else ""}
 Tags: {', '.join(analysis.tags) if analysis else ""}
+{metadata_section}
 
 # Source content
 

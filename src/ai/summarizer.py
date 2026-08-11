@@ -19,11 +19,13 @@ _URL_SAFE_CHARS = ":/?#[]@!$&'*,;=~%+"
 TOPIC_RADAR_PROFILE_ID = "pangmen-topic-radar"
 AI_TECH_RADAR_PROFILE_ID = "pangmen-ai-tech-radar"
 PLATFORM_TREND_RADAR_PROFILE_ID = "pangmen-platform-trend-radar"
+PLATFORM_CHANGE_RADAR_PROFILE_ID = "pangmen-platform-change-radar"
 CONTENT_RADAR_PROFILE_IDS = frozenset(
     {
         TOPIC_RADAR_PROFILE_ID,
         AI_TECH_RADAR_PROFILE_ID,
         PLATFORM_TREND_RADAR_PROFILE_ID,
+        PLATFORM_CHANGE_RADAR_PROFILE_ID,
     }
 )
 MINING_MARKET_RADAR_PROFILE_ID = "mining-market-radar"
@@ -260,7 +262,11 @@ class DailySummarizer:
             and language == "zh"
             and any(
                 profile_id
-                in {AI_TECH_RADAR_PROFILE_ID, PLATFORM_TREND_RADAR_PROFILE_ID}
+                in {
+                    AI_TECH_RADAR_PROFILE_ID,
+                    PLATFORM_TREND_RADAR_PROFILE_ID,
+                    PLATFORM_CHANGE_RADAR_PROFILE_ID,
+                }
                 for profile_id in self.profile_order
             )
         ):
@@ -284,7 +290,11 @@ class DailySummarizer:
             language == "zh"
             and any(
                 group.profile_id
-                in {AI_TECH_RADAR_PROFILE_ID, PLATFORM_TREND_RADAR_PROFILE_ID}
+                in {
+                    AI_TECH_RADAR_PROFILE_ID,
+                    PLATFORM_TREND_RADAR_PROFILE_ID,
+                    PLATFORM_CHANGE_RADAR_PROFILE_ID,
+                }
                 for group in view.groups
             )
             and all(
@@ -442,7 +452,8 @@ class DailySummarizer:
             for view_item in trend_items
             if view_item.item.metadata.get("trend_pool") == "watch"
         ]
-        parts.append("## 🔥 今日可借势热点\n\n")
+        parts.append("## 🔥 今日运营热点\n\n")
+        parts.append("### 今日可借势\n\n")
         if not leverage_items:
             parts.append("今日暂无达到筛选标准的可借势热点。\n\n")
         else:
@@ -459,7 +470,7 @@ class DailySummarizer:
                         score_override=view_item.score,
                     )
                 )
-        parts.append("## 👀 今日大盘热点观察\n\n")
+        parts.append("### 今日大盘观察\n\n")
         if not watch_items:
             parts.append("今日暂无达到筛选标准的大盘热点观察。\n")
         else:
@@ -476,6 +487,35 @@ class DailySummarizer:
                         score_override=view_item.score,
                     )
                 )
+
+        change_group = groups.get(PLATFORM_CHANGE_RADAR_PROFILE_ID)
+        if change_group and change_group.items:
+            parts.append("## 📡 平台变化雷达\n\n")
+            platform_order = ("douyin", "xiaohongshu", "bilibili", "wechat")
+            by_platform: Dict[str, List[SummaryItemView]] = {}
+            for view_item in change_group.items:
+                platform = str(view_item.item.metadata.get("platform") or "unknown")
+                by_platform.setdefault(platform, []).append(view_item)
+            ordered_platforms = [
+                platform for platform in platform_order if platform in by_platform
+            ] + [
+                platform for platform in by_platform if platform not in platform_order
+            ]
+            for platform in ordered_platforms:
+                parts.append(f"### 【{self._platform_change_platform_label(platform)}】\n\n")
+                for view_item in by_platform[platform]:
+                    parts.append(
+                        self._format_item(
+                            view_item.item,
+                            labels,
+                            language,
+                            view_item.index,
+                            heading_level=4,
+                            anchor_id=view_item.anchor_id,
+                            title_override=view_item.title,
+                            score_override=view_item.score,
+                        )
+                    )
         return normalize_language("".join(parts).rstrip() + "\n", language)
 
     @staticmethod
@@ -740,6 +780,13 @@ class DailySummarizer:
                 anchor_id=anchor_id,
                 title_override=title_override,
                 score_override=score_override,
+            )
+        if language == "zh" and profile_id == PLATFORM_CHANGE_RADAR_PROFILE_ID:
+            return self._format_compact_platform_change_card(
+                item,
+                index=index,
+                anchor_id=anchor_id,
+                title_override=title_override,
             )
         artifact = item.processing.artifacts.get(language) if item.processing else None
         analysis = item.processing.analysis if item.processing else None
@@ -1112,6 +1159,99 @@ class DailySummarizer:
             )
         lines.extend(["", f"来源：{self._compact_trend_source(item)}"])
         lines.extend(["", "---", ""])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _platform_change_platform_label(platform: object) -> str:
+        return {
+            "douyin": "抖音",
+            "xiaohongshu": "小红书",
+            "bilibili": "B站",
+            "wechat": "视频号 / 微信小店",
+        }.get(str(platform or ""), str(platform or "未知平台"))
+
+    @staticmethod
+    def _platform_change_type_labels(values: object) -> str:
+        labels = {
+            "operation": "运营",
+            "ecommerce": "电商",
+            "feature": "功能",
+            "rule": "规则",
+        }
+        if not isinstance(values, list):
+            values = []
+        rendered = [labels[value] for value in values if value in labels]
+        return " / ".join(rendered) or "平台变化"
+
+    def _format_compact_platform_change_card(
+        self,
+        item: ContentItem,
+        *,
+        index: int,
+        anchor_id: Optional[str],
+        title_override: Optional[str],
+    ) -> str:
+        """Render a factual platform-change card without topic suggestions."""
+        artifact = item.processing.artifacts.get("zh") if item.processing else None
+        blocks = {block.id: block for block in (artifact.blocks if artifact else [])}
+        analysis = item.processing.analysis if item.processing else None
+        title = _pangu(
+            _escape_markdown(title_override or (artifact.title if artifact else item.title))
+        )
+        platform = self._platform_change_platform_label(item.metadata.get("platform"))
+        change_type = self._platform_change_type_labels(
+            item.metadata.get("change_types")
+        )
+        what_changed = self._compact_trend_brief(
+            blocks.get("what_changed").content
+            if blocks.get("what_changed")
+            else analysis.summary
+            if analysis
+            else item.content
+        )
+        affected = self._compact_trend_text(
+            blocks.get("affected_audience").content
+            if blocks.get("affected_audience")
+            else "影响对象待确认",
+            100,
+        )
+        status = self._compact_trend_text(
+            blocks.get("change_status").content
+            if blocks.get("change_status")
+            else "待确认",
+            80,
+        )
+        source_level = str(item.metadata.get("source_level") or "secondary")
+        source_label = {
+            "official": "官方",
+            "official_republished": str(
+                item.metadata.get("source_attribution") or "官方信息经媒体转述"
+            ),
+            "secondary": "二手待确认",
+            "unverified": "未核实",
+        }.get(source_level, "二手待确认")
+        safe_url = _safe_url(item.metadata.get("original_url") or item.url)
+        source = _pangu(_escape_markdown(source_label))
+        if safe_url:
+            source += f" · [原始链接]({safe_url})"
+
+        lines = [
+            f'<a id="{anchor_id or f"item-{index}"}"></a>',
+            f"#### 📱 {platform}｜{change_type}",
+            "",
+            f"**【变化标题】** {title}",
+            "",
+            f"**变了什么：** {_pangu(_escape_markdown(what_changed))}",
+            "",
+            f"**影响谁：** {_pangu(_escape_markdown(affected))}",
+            "",
+            f"**状态：** {_pangu(_escape_markdown(status))}",
+            "",
+            f"**来源：** {source}",
+            "",
+            "---",
+            "",
+        ]
         return "\n".join(lines)
 
     @staticmethod

@@ -254,6 +254,80 @@ def test_platform_trend_analysis_uses_independent_operations_and_content_scores(
     assert analysis.score == 8.5
 
 
+def test_platform_change_analysis_cannot_promote_secondary_evidence_to_official():
+    async def complete(**kwargs):  # type: ignore[no-untyped-def]
+        return json.dumps(
+            {
+                "score": 9,
+                "is_platform_change": True,
+                "platform": "douyin",
+                "change_types": ["feature"],
+                "source_level": "official",
+                "affected_audience": ["创作者"],
+                "impact_level": "high",
+                "change_status": "已上线",
+                "reason": "模型误判为官方",
+                "summary": "媒体称功能已上线。",
+                "tags": ["功能"],
+            },
+            ensure_ascii=False,
+        )
+
+    item = _make_item("platform-change:secondary")
+    item.profile = "pangmen-platform-change-radar"
+    item.metadata = {
+        "platform": "wechat",
+        "change_types": ["operation", "feature"],
+        "source_level": "secondary",
+    }
+    asyncio.run(
+        ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
+    )
+
+    analysis = item.processing.analysis
+    assert analysis.score == 6
+    assert analysis.platform == "wechat"
+    assert analysis.change_types == ["operation", "feature"]
+    assert analysis.source_level == "secondary"
+
+
+def test_platform_change_search_without_actual_change_time_is_capped():
+    async def complete(**kwargs):  # type: ignore[no-untyped-def]
+        return json.dumps(
+            {
+                "score": 9,
+                "is_platform_change": True,
+                "platform": "wechat",
+                "change_types": ["feature"],
+                "source_level": "official_republished",
+                "affected_audience": ["视频号创作者"],
+                "impact_level": "high",
+                "change_status": "今日上线",
+                "reason": "搜索结果称功能上线",
+                "summary": "微信小店上线新功能。",
+                "tags": ["功能"],
+            },
+            ensure_ascii=False,
+        )
+
+    item = _make_item("platform-change:unconfirmed-time")
+    item.profile = "pangmen-platform-change-radar"
+    item.metadata = {
+        "platform": "wechat",
+        "change_types": ["feature"],
+        "source_level": "official_republished",
+        "discovery_mode": "search_rss",
+        "change_time_confidence": "unconfirmed",
+    }
+    asyncio.run(
+        ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
+    )
+
+    analysis = item.processing.analysis
+    assert analysis.score == 6
+    assert analysis.change_status == "实际变化时间待确认"
+
+
 def test_analyze_item_repairs_invalid_result_once():
     responses = iter(
         [

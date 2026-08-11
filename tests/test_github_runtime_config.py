@@ -49,6 +49,7 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
         "pangmen-topic-radar": 12,
         "pangmen-ai-tech-radar": 5,
         "pangmen-platform-trend-radar": 8,
+        "pangmen-platform-change-radar": 5,
     }
     assert config["digest"]["max_items"] == 25
     assert config["digest"]["platform_trend_leverage_limit"] == 6
@@ -104,3 +105,31 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert provider_limits[("toutiao", "alapi_tophub")] == (20, 20)
     assert provider_limits[("zhihu", "alapi_tophub")] == (20, 20)
     assert "platform-trend" not in config["digest"]["category_groups"]
+
+
+def test_platform_change_radar_uses_public_watchers_and_persistent_action_state():
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(encoding="utf-8")
+    )
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
+        encoding="utf-8"
+    )
+
+    source = config["sources"]["platform_changes"]
+    assert source["enabled"] is True
+    assert source["lookback_days"] == 7
+    assert source["state_file"] == "data/platform_change_state.json"
+    watchers = {watcher["name"]: watcher for watcher in source["watchers"]}
+    assert watchers["xiaohongshu-public-index"]["mode"] == "index"
+    assert watchers["bilibili-community-convention"]["mode"] == "page_diff"
+    assert watchers["wechat-public-search"]["mode"] == "search_rss"
+    assert watchers["wechat-public-search"]["source_level"] == "official_republished"
+    assert "actions/cache/restore@v4" in workflow
+    assert "actions/cache/save@v4" in workflow
+    assert "data/platform_change_state.json" in workflow
+    assert workflow.index("Restore platform change state") < workflow.index("Run Horizon")
+    assert workflow.index("Run Horizon") < workflow.index("Save platform change state")
+    assert (
+        "if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full')"
+        in workflow
+    )

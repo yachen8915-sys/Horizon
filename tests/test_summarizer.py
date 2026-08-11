@@ -517,11 +517,12 @@ def test_generate_content_radar_summary_splits_platform_trends_into_two_pools():
     assert "## 🤖 今日 AI 资讯" in result
     assert "### AI 应用" in result
     assert "### AI 技术" in result
-    assert "## 🔥 今日可借势热点" in result
-    assert "## 👀 今日大盘热点观察" in result
+    assert "## 🔥 今日运营热点" in result
+    assert "### 今日可借势" in result
+    assert "### 今日大盘观察" in result
     assert result.index("### AI 应用") < result.index("### AI 技术")
-    assert result.index("### AI 技术") < result.index("## 🔥 今日可借势热点")
-    assert result.index("## 🔥 今日可借势热点") < result.index("## 👀 今日大盘热点观察")
+    assert result.index("### AI 技术") < result.index("## 🔥 今日运营热点")
+    assert result.index("### 今日可借势") < result.index("### 今日大盘观察")
     assert "Horizon 每日速递" not in result
     assert "从 100 条内容中筛选" not in result
 
@@ -837,8 +838,9 @@ def test_empty_content_radar_does_not_fall_back_to_generic_horizon_summary():
     assert result.startswith("# 🔥 旁门每日内容雷达\n")
     assert "### AI 应用" in result
     assert "### AI 技术" in result
-    assert "## 🔥 今日可借势热点" in result
-    assert "## 👀 今日大盘热点观察" in result
+    assert "## 🔥 今日运营热点" in result
+    assert "### 今日可借势" in result
+    assert "### 今日大盘观察" in result
     assert "Horizon 每日速递" not in result
 
 

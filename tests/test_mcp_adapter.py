@@ -140,7 +140,7 @@ def test_mcp_filter_and_reporting_support_every_registered_source() -> None:
                     },
                     "aihot": {"enabled": True},
                     "huggingface": {"enabled": True},
-                    "platform_trends": {
+                        "platform_trends": {
                         "enabled": True,
                         "providers": [
                             {
@@ -148,9 +148,20 @@ def test_mcp_filter_and_reporting_support_every_registered_source() -> None:
                                 "provider": "fixture",
                                 "base_url": "https://example.com/trends",
                             }
-                        ],
-                    },
-            },
+                            ],
+                        },
+                        "platform_changes": {
+                            "enabled": True,
+                            "watchers": [
+                                {
+                                    "name": "fixture-search",
+                                    "mode": "search_rss",
+                                    "platform": "douyin",
+                                    "query": "抖音 规则 更新",
+                                }
+                            ],
+                        },
+                },
         }
     )
 

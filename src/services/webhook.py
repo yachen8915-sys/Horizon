@@ -414,10 +414,15 @@ class WebhookNotifier:
             "pangmen-topic-radar",
             "pangmen-ai-tech-radar",
             "pangmen-platform-trend-radar",
+            "pangmen-platform-change-radar",
         }
         return bool(
             profile_ids
-            & {"pangmen-ai-tech-radar", "pangmen-platform-trend-radar"}
+            & {
+                "pangmen-ai-tech-radar",
+                "pangmen-platform-trend-radar",
+                "pangmen-platform-change-radar",
+            }
         ) and profile_ids <= allowed
 
     @staticmethod
@@ -573,10 +578,52 @@ class WebhookNotifier:
                         )
                     )
 
-            elements.append(_markdown("## 🔥 今日可借势热点"))
+            elements.append(_markdown("## 🔥 今日运营热点"))
+            elements.append(_markdown("### 今日可借势"))
             add_selected_panels(leverage_items, show_score=True)
-            elements.append(_markdown("## 👀 今日大盘热点观察"))
+            elements.append(_markdown("### 今日大盘观察"))
             add_selected_panels(watch_items, show_score=False)
+
+            change_group = grouped.get("pangmen-platform-change-radar")
+            if change_group is not None and change_group.items:
+                elements.append(_markdown("## 📡 平台变化雷达"))
+                platform_order = ("douyin", "xiaohongshu", "bilibili", "wechat")
+                by_platform: dict[str, list[Any]] = {}
+                for view_item in change_group.items:
+                    platform = str(
+                        view_item.item.metadata.get("platform") or "unknown"
+                    )
+                    by_platform.setdefault(platform, []).append(view_item)
+                ordered_platforms = [
+                    platform
+                    for platform in platform_order
+                    if platform in by_platform
+                ] + [
+                    platform
+                    for platform in by_platform
+                    if platform not in platform_order
+                ]
+                for platform in ordered_platforms:
+                    platform_label = summarizer._platform_change_platform_label(
+                        platform
+                    )
+                    elements.append(_markdown(f"### 【{platform_label}】"))
+                    for view_item in by_platform[platform]:
+                        elements.append(
+                            _collapsible_panel(
+                                view_item.title,
+                                _format_markdown_for_webhook(
+                                    summarizer.generate_webhook_item(
+                                        view_item.item,
+                                        language=lang,
+                                        index=view_item.index,
+                                        total=view_item.group_count,
+                                        title=view_item.title,
+                                        score=view_item.score,
+                                    )
+                                ),
+                            )
+                        )
         else:
             for group in view.groups:
                 if topic_radar:
@@ -666,7 +713,11 @@ class WebhookNotifier:
                 lang == "zh"
                 and any(
                     profile_id
-                    in {"pangmen-ai-tech-radar", "pangmen-platform-trend-radar"}
+                    in {
+                        "pangmen-ai-tech-radar",
+                        "pangmen-platform-trend-radar",
+                        "pangmen-platform-change-radar",
+                    }
                     for profile_id in summarizer.profile_order
                 )
             )

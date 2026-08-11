@@ -1,0 +1,22 @@
+{
+  "id": "pangmen-platform-change-radar",
+  "name": "Pangmen Platform Change Radar",
+  "display_names": {
+    "zh": "平台变化雷达"
+  },
+  "match": "match.md",
+  "analysis": "analysis.md",
+  "content": {
+    "analysis_max_chars": 12000,
+    "enrichment_max_chars": 16000,
+    "sampling": "head-middle-tail"
+  },
+  "enrichment": {
+    "prompt": "enrichment.md",
+    "blocks": [
+      {"id": "what_changed", "type": "section", "tools": [], "primary": true},
+      {"id": "affected_audience", "type": "section", "tools": []},
+      {"id": "change_status", "type": "section", "tools": []}
+    ]
+  }
+}

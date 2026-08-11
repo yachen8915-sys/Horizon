@@ -1,0 +1,776 @@
+"""Contract tests for the public platform-change radar source."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import httpx
+
+from src.ai.summarizer import DailySummarizer
+from src.ai.prompting.analysis import analysis_system_prompt, analysis_user_prompt
+from src.ai.prompting.enrichment import item_context
+from src.models import (
+    ClassificationResult,
+    ContentAnalysis,
+    ContentArtifact,
+    ContentBlock,
+    ContentItem,
+    PlatformChangeWatcherConfig,
+    PlatformChangesConfig,
+    ProcessingResult,
+    SourceType,
+    WebhookConfig,
+)
+from src.scrapers.platform_changes import (
+    PlatformChangesScraper,
+    normalize_page_text,
+)
+from src.processing import ProfileRegistry
+from src.services.webhook import WebhookNotifier
+
+
+NOW = datetime(2026, 8, 12, 1, 15, tzinfo=timezone.utc)
+SINCE = NOW - timedelta(hours=24)
+
+
+def _run(scraper: PlatformChangesScraper) -> list[ContentItem]:
+    return asyncio.run(scraper.fetch(SINCE))
+
+
+def _client(handler) -> httpx.AsyncClient:  # type: ignore[no-untyped-def]
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _config(tmp_path: Path, *watchers: PlatformChangeWatcherConfig) -> PlatformChangesConfig:
+    return PlatformChangesConfig(
+        enabled=True,
+        lookback_days=7,
+        state_file=str(tmp_path / "platform_change_state.json"),
+        watchers=list(watchers),
+    )
+
+
+def _discovery_item(
+    item_id: str,
+    *,
+    title: str,
+    url: str,
+    content: str,
+    author: str = "行业媒体",
+    published_at: datetime = NOW,
+) -> ContentItem:
+    return ContentItem(
+        id=item_id,
+        source_type=SourceType.GOOGLE_NEWS,
+        title=title,
+        url=url,
+        content=content,
+        author=author,
+        published_at=published_at,
+    )
+
+
+def test_normalize_page_text_ignores_markup_and_whitespace_noise() -> None:
+    first = "<main><h1>投稿规则</h1><p>原创 内容</p></main>"
+    second = "<main>\n<h1> 投稿规则 </h1><p>原创   内容</p>\n</main>"
+
+    assert normalize_page_text(first) == normalize_page_text(second)
+    assert "投稿规则" in normalize_page_text(first)
+
+
+def test_index_first_run_builds_baseline_without_emitting_history(tmp_path: Path) -> None:
+    html = '<a href="/notice/1">规则更新一</a><a href="https://outside.example/a">外链</a>'
+    watcher = PlatformChangeWatcherConfig(
+        name="xiaohongshu-index",
+        mode="index",
+        platform="xiaohongshu",
+        url="https://school.xiaohongshu.com/newhome",
+        include_patterns=[r"/notice/"],
+        change_types=["ecommerce", "rule"],
+        source_level="official",
+    )
+    client = _client(lambda request: httpx.Response(200, text=html, request=request))
+    config = _config(tmp_path, watcher)
+
+    assert _run(PlatformChangesScraper(config, client, now_provider=lambda: NOW)) == []
+
+    state = json.loads(Path(config.state_file).read_text(encoding="utf-8"))
+    seen = state["watchers"]["xiaohongshu-index"]["seen_urls"]
+    assert list(seen) == ["https://school.xiaohongshu.com/notice/1"]
+    asyncio.run(client.aclose())
+
+
+def test_index_js_shell_without_public_anchors_is_not_marked_as_verified(tmp_path: Path) -> None:
+    watcher = PlatformChangeWatcherConfig(
+        name="js-only-index",
+        mode="index",
+        platform="xiaohongshu",
+        url="https://school.xiaohongshu.com/newhome",
+        source_level="official",
+    )
+    client = _client(
+        lambda request: httpx.Response(
+            200,
+            text='<div id="app"></div><script src="bundle.js"></script>',
+            request=request,
+        )
+    )
+    config = _config(tmp_path, watcher)
+
+    assert _run(PlatformChangesScraper(config, client, now_provider=lambda: NOW)) == []
+
+    state = json.loads(Path(config.state_file).read_text(encoding="utf-8"))
+    assert "js-only-index" not in state["watchers"]
+    asyncio.run(client.aclose())
+
+
+def test_index_emits_only_new_matching_same_domain_links(tmp_path: Path) -> None:
+    body = {'html': '<a href="/notice/1">规则更新一</a>'}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/newhome":
+            return httpx.Response(200, text=body["html"], request=request)
+        return httpx.Response(200, text="<article>新规则将于8月20日生效</article>", request=request)
+
+    watcher = PlatformChangeWatcherConfig(
+        name="xiaohongshu-index",
+        mode="index",
+        platform="xiaohongshu",
+        url="https://school.xiaohongshu.com/newhome",
+        include_patterns=[r"/notice/"],
+        exclude_patterns=[r"tutorial"],
+        change_types=["rule"],
+        source_level="official",
+    )
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+
+    body["html"] = """
+      <a href="/notice/1">规则更新一</a>
+      <a href="/notice/2">创作者规则新增门槛</a>
+      <a href="/tutorial/3">直播教程</a>
+      <a href="https://outside.example/notice/4">站外转载</a>
+    """
+    items = _run(scraper)
+
+    assert [item.title for item in items] == ["创作者规则新增门槛"]
+    assert items[0].source_type == SourceType.PLATFORM_CHANGES
+    assert items[0].profile == "pangmen-platform-change-radar"
+    assert items[0].metadata["source_level"] == "official"
+    assert items[0].metadata["change_types"] == ["rule"]
+    asyncio.run(client.aclose())
+
+
+def test_index_uses_public_page_timestamp_when_available(tmp_path: Path) -> None:
+    body = {"html": '<article><a href="/notice/1">旧规则</a></article>'}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/newhome":
+            return httpx.Response(200, text=body["html"], request=request)
+        return httpx.Response(200, text="<article>规则正文</article>", request=request)
+
+    watcher = PlatformChangeWatcherConfig(
+        name="dated-index",
+        mode="index",
+        platform="xiaohongshu",
+        url="https://school.xiaohongshu.com/newhome",
+        include_patterns=[r"/notice/"],
+        source_level="official",
+    )
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    body["html"] = """
+      <article><a href="/notice/1">旧规则</a></article>
+      <article><a href="/notice/2">新规则上线</a><time datetime="2026-08-11T12:30:00+08:00">8月11日</time></article>
+    """
+
+    item = _run(scraper)[0]
+
+    assert item.published_at == datetime(2026, 8, 11, 4, 30, tzinfo=timezone.utc)
+    assert item.metadata["published_at_basis"] == "page"
+    asyncio.run(client.aclose())
+
+
+def test_page_diff_first_run_baselines_then_ignores_unchanged_text(tmp_path: Path) -> None:
+    body = {"html": "<main><h1>B站投稿规范</h1><p>原创内容需要声明。</p></main>"}
+    watcher = PlatformChangeWatcherConfig(
+        name="bilibili-convention",
+        mode="page_diff",
+        platform="bilibili",
+        url="https://member.bilibili.com/studio/convention/",
+        change_types=["rule"],
+        source_level="official",
+        min_content_chars=10,
+    )
+    client = _client(lambda request: httpx.Response(200, text=body["html"], request=request))
+    config = _config(tmp_path, watcher)
+    scraper = PlatformChangesScraper(config, client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    body["html"] = "<main>\n<h1> B站投稿规范 </h1><p>原创内容需要声明。</p>\n</main>"
+    assert _run(scraper) == []
+
+    state = json.loads(Path(config.state_file).read_text(encoding="utf-8"))
+    saved = state["watchers"]["bilibili-convention"]
+    assert saved["normalized_text_hash"]
+    assert saved["normalized_text"]
+    assert saved["last_changed"] is None
+    asyncio.run(client.aclose())
+
+
+def test_page_diff_change_emits_old_new_and_diff_context(tmp_path: Path) -> None:
+    body = {"html": "<main><h1>投稿规则</h1><p>投稿门槛为100粉丝。</p></main>"}
+    watcher = PlatformChangeWatcherConfig(
+        name="douyin-rule",
+        mode="page_diff",
+        platform="douyin",
+        url="https://open.douyin.com/platform/rule",
+        change_types=["operation", "rule"],
+        source_level="official",
+        min_content_chars=10,
+    )
+    client = _client(lambda request: httpx.Response(200, text=body["html"], request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+
+    body["html"] = "<main><h1>投稿规则</h1><p>投稿门槛调整为500粉丝，8月20日生效。</p></main>"
+    items = _run(scraper)
+
+    assert len(items) == 1
+    assert "旧版关键文本" in (items[0].content or "")
+    assert "新版关键文本" in (items[0].content or "")
+    assert "-投稿门槛为100粉丝" in items[0].metadata["diff_excerpt"]
+    assert "+投稿门槛调整为500粉丝" in items[0].metadata["diff_excerpt"]
+    assert items[0].metadata["previous_hash"] != items[0].metadata["current_hash"]
+    asyncio.run(client.aclose())
+
+
+def test_one_watcher_failure_does_not_block_another_watcher(tmp_path: Path) -> None:
+    body = {"good": "<main><p>规则旧版本内容。</p></main>"}
+    failed = PlatformChangeWatcherConfig(
+        name="failed",
+        mode="page_diff",
+        platform="douyin",
+        url="https://open.douyin.com/failed",
+        source_level="official",
+        min_content_chars=5,
+    )
+    good = PlatformChangeWatcherConfig(
+        name="good",
+        mode="page_diff",
+        platform="bilibili",
+        url="https://member.bilibili.com/good",
+        source_level="official",
+        min_content_chars=5,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/failed":
+            return httpx.Response(403, request=request)
+        return httpx.Response(200, text=body["good"], request=request)
+
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, failed, good), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    body["good"] = "<main><p>规则新版本新增创作者声明。</p></main>"
+
+    items = _run(scraper)
+
+    assert len(items) == 1
+    assert items[0].metadata["watcher"] == "good"
+    asyncio.run(client.aclose())
+
+
+def test_search_rss_uses_seven_day_window_and_seen_url_dedup(tmp_path: Path, monkeypatch) -> None:
+    rows = [
+        _discovery_item(
+            "google_news:old",
+            title="抖音规则更新",
+            url="https://media.example/old",
+            content="抖音规则更新",
+            published_at=NOW - timedelta(days=8),
+        ),
+        _discovery_item(
+            "google_news:one",
+            title="抖音新增创作者功能",
+            url="https://media.example/one",
+            content="抖音新增创作者功能",
+        ),
+    ]
+    observed_since: list[datetime] = []
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since: datetime) -> list[ContentItem]:
+            observed_since.append(since)
+            return list(rows)
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="douyin-search",
+        mode="search_rss",
+        platform="douyin",
+        query="site:open.douyin.com 抖音 规则 更新",
+        source_level="secondary",
+        change_types=["feature", "rule"],
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    rows.append(
+        _discovery_item(
+            "google_news:two",
+            title="抖音上线新的发布能力",
+            url="https://media.example/two",
+            content="抖音上线新的发布能力",
+        )
+    )
+    items = _run(scraper)
+
+    assert observed_since[0] == NOW - timedelta(days=7)
+    assert [str(item.url) for item in items] == ["https://media.example/two"]
+    assert _run(scraper) == []
+    asyncio.run(client.aclose())
+
+
+def test_search_rss_seen_state_normalizes_tracking_url_variants(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rows = [
+        _discovery_item(
+            "google_news:baseline",
+            title="抖音创作者规则更新",
+            url="https://open.douyin.com/notice/42?utm_source=google",
+            content="抖音创作者规则已于2026年8月11日更新。",
+        )
+    ]
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since):  # type: ignore[no-untyped-def]
+            return list(rows)
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="douyin-search-normalized",
+        mode="search_rss",
+        platform="douyin",
+        query="site:open.douyin.com 抖音 规则 更新",
+        source_level="official",
+        official_domains=["open.douyin.com"],
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    config = _config(tmp_path, watcher)
+    scraper = PlatformChangesScraper(config, client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    rows[:] = [
+        _discovery_item(
+            "google_news:same-event-new-tracking",
+            title="抖音创作者规则更新",
+            url="https://OPEN.DOUYIN.COM/notice/42#latest",
+            content="抖音创作者规则已于2026年8月11日更新。",
+        )
+    ]
+
+    assert _run(scraper) == []
+    state = json.loads(Path(config.state_file).read_text(encoding="utf-8"))
+    assert list(state["watchers"][watcher.name]["seen_urls"]) == [
+        "https://open.douyin.com/notice/42"
+    ]
+    asyncio.run(client.aclose())
+
+
+def test_search_rss_skips_old_change_found_in_a_new_article(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rows = [
+        _discovery_item(
+            "google_news:baseline",
+            title="抖音规则更新汇总",
+            url="https://open.douyin.com/notice/baseline",
+            content="抖音规则更新汇总。",
+        )
+    ]
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since):  # type: ignore[no-untyped-def]
+            return list(rows)
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="douyin-search-old-change",
+        mode="search_rss",
+        platform="douyin",
+        query="site:open.douyin.com 抖音 规则 更新",
+        source_level="official",
+        official_domains=["open.douyin.com"],
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    rows.append(
+        _discovery_item(
+            "google_news:old-change-new-article",
+            title="抖音旧版投稿能力回顾",
+            url="https://open.douyin.com/notice/old-change",
+            content="该投稿能力已于2025年12月1日上线，今天被搜索引擎重新收录。",
+            published_at=NOW,
+        )
+    )
+
+    assert _run(scraper) == []
+    asyncio.run(client.aclose())
+
+
+def test_search_rss_marks_actual_change_time_as_unconfirmed_when_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rows = [
+        _discovery_item(
+            "google_news:baseline",
+            title="微信小店规则更新汇总",
+            url="https://media.example/baseline",
+            content="微信小店规则更新汇总。",
+        )
+    ]
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since):  # type: ignore[no-untyped-def]
+            return list(rows)
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="wechat-search-unconfirmed-time",
+        mode="search_rss",
+        platform="wechat",
+        query="微信公开课 微信小店 更新",
+        source_level="official_republished",
+        attribution_keywords=["微信公开课"],
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    rows.append(
+        _discovery_item(
+            "google_news:unconfirmed-time",
+            title="微信小店上线新功能",
+            url="https://media.example/unconfirmed-time",
+            content="微信公开课介绍微信小店上线新功能，但未说明实际上线日期。",
+            published_at=NOW,
+        )
+    )
+
+    item = _run(scraper)[0]
+
+    assert item.metadata["article_published_at"] == NOW.isoformat()
+    assert item.metadata["change_time_confidence"] == "unconfirmed"
+    assert "actual_change_at" not in item.metadata
+    asyncio.run(client.aclose())
+
+
+def test_official_republished_requires_explicit_attribution(tmp_path: Path, monkeypatch) -> None:
+    rows = [
+        _discovery_item(
+            "google_news:wx",
+            title="微信小店调整带货规则",
+            url="https://media.example/wx",
+            content="来源：微信公开课。微信小店调整带货规则。",
+            author="运营媒体",
+        )
+    ]
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since):  # type: ignore[no-untyped-def]
+            return list(rows)
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="wechat-search",
+        mode="search_rss",
+        platform="wechat",
+        query="微信公开课 微信小店 更新",
+        source_level="official_republished",
+        attribution_keywords=["微信公开课", "微信派"],
+        change_types=["ecommerce", "rule"],
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+
+    rows.append(
+        _discovery_item(
+            "google_news:wx2",
+            title="微信小店上线新功能",
+            url="https://media.example/wx2",
+            content="微信公开课宣布微信小店上线新功能。",
+            author="另一媒体",
+        )
+    )
+    rows.append(
+        _discovery_item(
+            "google_news:wx3",
+            title="用户发现视频号灰度功能",
+            url="https://media.example/wx3",
+            content="有用户发现视频号灰度功能。",
+            author="行业观察",
+        )
+    )
+    items = _run(scraper)
+
+    levels = {item.id: item.metadata["source_level"] for item in items}
+    assert levels["platform_changes:search_rss:google_news:wx2"] == "official_republished"
+    assert levels["platform_changes:search_rss:google_news:wx3"] == "secondary"
+    assert items[0].metadata["source_attribution"] == "微信公开课，经另一媒体转述"
+    asyncio.run(client.aclose())
+
+
+def test_unverified_search_results_do_not_enter_candidates(tmp_path: Path, monkeypatch) -> None:
+    row = _discovery_item(
+        "google_news:x",
+        title="小红书疑似新增功能",
+        url="https://unknown.example/x",
+        content="小红书疑似新增功能",
+    )
+
+    class StubGoogleNews:
+        def __init__(self, config, client):  # type: ignore[no-untyped-def]
+            pass
+
+        async def fetch(self, since):  # type: ignore[no-untyped-def]
+            return [row]
+
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(
+        name="unverified",
+        mode="search_rss",
+        platform="xiaohongshu",
+        query="小红书 更新",
+        source_level="unverified",
+    )
+    client = _client(lambda request: httpx.Response(500, request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    asyncio.run(client.aclose())
+
+
+def _processed_change_item(platform: str, source_level: str = "official") -> ContentItem:
+    return ContentItem(
+        id=f"platform_changes:page_diff:{platform}",
+        source_type=SourceType.PLATFORM_CHANGES,
+        title=f"{platform}发布规则变化",
+        url=f"https://example.com/{platform}",
+        published_at=NOW,
+        profile="pangmen-platform-change-radar",
+        metadata={
+            "platform": platform,
+            "change_types": ["rule"],
+            "source_level": source_level,
+            "source_attribution": "微信公开课，经运营媒体转述"
+            if source_level == "official_republished"
+            else None,
+        },
+        processing=ProcessingResult(
+            classification=ClassificationResult(
+                profile="pangmen-platform-change-radar",
+                method="source_override",
+            ),
+            analysis=ContentAnalysis(
+                score=8,
+                reason="规则发生明确变化",
+                summary="平台调整了创作者规则。",
+                tags=["规则"],
+            ),
+            artifacts={
+                "zh": ContentArtifact(
+                    language="zh",
+                    title=f"{platform}创作者规则调整",
+                    blocks=[
+                        ContentBlock(
+                            id="what_changed",
+                            title="变了什么",
+                            content="创作者发布门槛由100粉丝调整为500粉丝。",
+                            primary=True,
+                        ),
+                        ContentBlock(
+                            id="affected_audience",
+                            title="影响谁",
+                            content="内容创作者与账号运营人员。",
+                        ),
+                        ContentBlock(
+                            id="change_status",
+                            title="状态",
+                            content="8月20日生效。",
+                        ),
+                    ],
+                )
+            },
+        ),
+    )
+
+
+def test_summary_shows_only_platforms_with_real_changes() -> None:
+    item = _processed_change_item("xiaohongshu")
+    summarizer = DailySummarizer(
+        profile_names={"pangmen-platform-change-radar": {"zh": "平台变化雷达"}},
+        profile_order=[
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+            "pangmen-platform-trend-radar",
+            "pangmen-platform-change-radar",
+        ],
+    )
+
+    summary = asyncio.run(summarizer.generate_summary([item], "2026-08-12", 1, "zh"))
+
+    assert "## 📡 平台变化雷达" in summary
+    assert "### 【小红书】" in summary
+    assert "【抖音】" not in summary
+    assert "**变了什么：**" in summary
+    assert "**影响谁：**" in summary
+    assert "**状态：**" in summary
+    assert "**来源：** 官方" in summary
+
+
+def test_summary_does_not_render_platform_change_section_without_items() -> None:
+    summarizer = DailySummarizer(
+        profile_order=[
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+            "pangmen-platform-trend-radar",
+            "pangmen-platform-change-radar",
+        ]
+    )
+
+    summary = asyncio.run(summarizer.generate_summary([], "2026-08-12", 0, "zh"))
+
+    assert "平台变化雷达" not in summary
+
+
+def test_secondary_card_never_labels_the_source_as_official() -> None:
+    item = _processed_change_item("wechat", source_level="secondary")
+    card = DailySummarizer().generate_webhook_item(
+        item,
+        language="zh",
+        index=1,
+        total=1,
+    )
+
+    assert "**来源：** 二手待确认" in card
+    assert "**来源：** 官方" not in card
+
+
+def test_platform_change_prompts_receive_trusted_source_and_diff_metadata() -> None:
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-platform-change-radar")
+    item = _processed_change_item("wechat", source_level="secondary")
+    item.metadata.update(
+        {
+            "discovery_mode": "search_rss",
+            "article_published_at": "2026-08-12T01:15:00+00:00",
+            "change_time_confidence": "unconfirmed",
+            "diff_excerpt": "-100粉丝\n+500粉丝",
+        }
+    )
+
+    system = analysis_system_prompt(profile)
+    user = analysis_user_prompt(item, "Content: diff", "")
+    enrichment = item_context(item, profile, include_content=True)
+
+    assert '"is_platform_change"' in system
+    assert '"source_level"' in system
+    assert '"change_types"' in system
+    assert '"source_level": "secondary"' in user
+    assert '"article_published_at": "2026-08-12T01:15:00+00:00"' in user
+    assert '"change_time_confidence": "unconfirmed"' in user
+    assert '"diff_excerpt": "-100粉丝\\n+500粉丝"' in user
+    assert "搜索引擎当天发现或文章当天发布，不等于平台当天发生变化" in system
+    assert '"platform": "wechat"' in enrichment
+
+
+def test_content_analysis_accepts_platform_change_decision_fields() -> None:
+    analysis = ContentAnalysis(
+        score=8,
+        reason="规则门槛变化",
+        summary="门槛由100调整到500。",
+        is_platform_change=True,
+        platform="douyin",
+        change_types=["operation", "rule"],
+        source_level="official",
+        affected_audience=["创作者", "运营"],
+        impact_level="high",
+        change_status="8月20日生效",
+    )
+
+    assert analysis.is_platform_change is True
+    assert analysis.change_types == ["operation", "rule"]
+
+
+def test_feishu_content_radar_renders_change_platforms_and_hides_empty_section() -> None:
+    item = _processed_change_item("wechat", source_level="official_republished")
+    summarizer = DailySummarizer(
+        profile_names={"pangmen-platform-change-radar": {"zh": "平台变化雷达"}},
+        profile_order=[
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+            "pangmen-platform-trend-radar",
+            "pangmen-platform-change-radar",
+        ],
+    )
+    notifier = WebhookNotifier(
+        WebhookConfig(
+            enabled=True,
+            platform="feishu",
+            layout="collapsible",
+            url_env="TEST_WEBHOOK_URL",
+        )
+    )
+
+    assert notifier._is_content_radar_digest([item]) is True
+    body = notifier._build_feishu_collapsible_body(
+        important_items=[item],
+        all_items_count=1,
+        date="2026-08-12",
+        lang="zh",
+        summarizer=summarizer,
+        topic_radar=False,
+        content_radar=True,
+    )
+    rendered = json.dumps(body, ensure_ascii=False)
+    assert "## 📡 平台变化雷达" in rendered
+    assert "### 【视频号 / 微信小店】" in rendered
+    assert "微信公开课，经运营媒体转述" in rendered
+
+    empty_body = notifier._build_feishu_collapsible_body(
+        important_items=[],
+        all_items_count=0,
+        date="2026-08-12",
+        lang="zh",
+        summarizer=summarizer,
+        topic_radar=False,
+        content_radar=True,
+    )
+    assert "平台变化雷达" not in json.dumps(empty_body, ensure_ascii=False)

@@ -33,6 +33,7 @@ from .scrapers.bilibili import BilibiliScraper
 from .scrapers.aihot import AIHotScraper
 from .scrapers.huggingface import HuggingFaceScraper
 from .scrapers.platform_trends import PlatformTrendsScraper
+from .scrapers.platform_changes import PlatformChangesScraper
 from .processing.engagement import EngagementTracker
 from .ai.client import create_ai_client
 from .ai.analyzer import ContentAnalyzer
@@ -608,6 +609,20 @@ class HorizonOrchestrator:
                 )
                 tasks.append(
                     self._fetch_with_progress("Platform Trends", trend_scraper, since)
+                )
+
+            # Stateful official-page and search discovery for platform changes.
+            if (
+                getattr(self.config.sources, "platform_changes", None)
+                and self.config.sources.platform_changes.enabled
+            ):
+                change_scraper = PlatformChangesScraper(
+                    self.config.sources.platform_changes, client
+                )
+                tasks.append(
+                    self._fetch_with_progress(
+                        "Platform Changes", change_scraper, since
+                    )
                 )
 
             # Fetch all concurrently

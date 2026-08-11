@@ -22,6 +22,7 @@ def test_loads_builtin_profiles():
         "pangmen-topic-radar",
         "pangmen-ai-tech-radar",
         "pangmen-platform-trend-radar",
+        "pangmen-platform-change-radar",
     ):
         profile = registry.get(profile_id)
         assert profile.match_prompt
@@ -249,6 +250,24 @@ def test_platform_trend_profile_rejects_beauty_topics_forced_into_ai_visuals():
     assert "添加 AI / PPT 标签不能制造账号相关性" in combined
     assert "美妆、妆容、穿搭或滤镜玩法" in combined
     assert "最高 4 分" in combined
+
+
+def test_platform_change_profile_is_evidence_first_and_not_a_topic_brainstorm():
+    profile = ProfileRegistry.load(
+        Path(__file__).resolve().parents[1] / "profiles", "tech-news"
+    ).get("pangmen-platform-change-radar")
+
+    assert "是否真的是平台变化" in profile.analysis_prompt
+    assert "source_level" in profile.analysis_prompt
+    assert "普通教程" in profile.analysis_prompt
+    assert "旧版关键文本" in profile.analysis_prompt
+    assert "不做热点价值评分、可借势角度或视频选题脑暴" in profile.analysis_prompt
+    assert "不要生成可借势方向、视频选题" in profile.enrichment_prompt
+    assert {block.id for block in profile.definition.enrichment.blocks} == {
+        "what_changed",
+        "affected_audience",
+        "change_status",
+    }
 
 
 def test_rejects_prompt_path_outside_profile_directory(tmp_path):
