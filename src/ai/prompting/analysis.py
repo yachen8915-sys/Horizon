@@ -13,6 +13,23 @@ ANALYSIS_RULES = f"""You are a content curator evaluating an item under the supp
 
 
 def analysis_system_prompt(profile: LoadedProfile) -> str:
+    if profile.id == "pangmen-platform-trend-radar":
+        output_contract = """{
+  "score": <same value as operations_score, from 0 to 10>,
+  "operations_score": <number from 0 to 10>,
+  "content_opportunity_score": <number from 0 to 10>,
+  "operations_reason": "<one sentence explaining why operations should care>",
+  "reason": "<concise explanation of both scores>",
+  "summary": "<one or two sentence factual hotspot brief>",
+  "tags": ["<tag>", "..."]
+}"""
+    else:
+        output_contract = """{
+  "score": <number from 0 to 10>,
+  "reason": "<concise explanation>",
+  "summary": "<one-sentence summary>",
+  "tags": ["<tag>", "..."]
+}"""
     return f"""{ANALYSIS_RULES}
 
 # Profile policy
@@ -22,12 +39,7 @@ def analysis_system_prompt(profile: LoadedProfile) -> str:
 # Output contract
 
 Return valid JSON only:
-{{
-  "score": <number from 0 to 10>,
-  "reason": "<concise explanation>",
-  "summary": "<one-sentence summary>",
-  "tags": ["<tag>", "..."]
-}}"""
+{output_contract}"""
 
 
 def analysis_user_prompt(

@@ -94,9 +94,9 @@ try {
         $response = Invoke-GhWithRetry `
             -Arguments @(
                 "api",
-                "/repos/$Repository/actions/workflows/$Workflow/runs?event=workflow_dispatch&per_page=30",
+                "/repos/$Repository/actions/workflows/$Workflow/runs?per_page=30",
                 "--jq",
-                '.workflow_runs | map({created_at, status, conclusion})'
+                '.workflow_runs | map({created_at, status, conclusion, display_title})'
             ) `
             -Operation "Read recent GitHub Actions runs"
         $parsedRuns = $response | ConvertFrom-Json
@@ -106,6 +106,9 @@ try {
     $TodayRuns = @(
         foreach ($run in $WorkflowRuns) {
             if ($null -eq $run -or [string]::IsNullOrWhiteSpace([string]$run.created_at)) {
+                continue
+            }
+            if ([string]$run.display_title -match '\(webhook_test\)$') {
                 continue
             }
             $createdAt = [DateTimeOffset]::Parse($run.created_at)

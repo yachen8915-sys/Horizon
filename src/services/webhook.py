@@ -1,5 +1,6 @@
 """Webhook notification service for Horizon."""
 
+import asyncio
 import json
 import logging
 import os
@@ -8,8 +9,9 @@ from rich.console import Console
 from dataclasses import asdict, dataclass
 from enum import Enum
 from urllib.parse import urlsplit, urlunsplit
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Any, List, Optional, Union, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from ..ai.markdown_utils import clean_app_summary_markdown
@@ -19,6 +21,31 @@ from ..ai.summarizer import DailySummarizer
 from ..url_security import UnsafeURLError, safe_request, validate_http_url
 
 logger = logging.getLogger(__name__)
+
+WEBHOOK_NOT_BEFORE_ENV = "HORIZON_WEBHOOK_NOT_BEFORE_LOCAL"
+WEBHOOK_TIMEZONE_ENV = "HORIZON_WEBHOOK_TIMEZONE"
+
+
+def _seconds_until_local_delivery(
+    target_text: str,
+    timezone_name: str,
+    *,
+    now_utc: datetime | None = None,
+) -> float:
+    """Return how long to wait before today's local delivery time."""
+    current_utc = now_utc or datetime.now(timezone.utc)
+    if current_utc.tzinfo is None:
+        raise ValueError("now_utc must be timezone-aware")
+
+    target_time = time.fromisoformat(target_text.strip())
+    local_timezone = ZoneInfo(timezone_name.strip())
+    current_local = current_utc.astimezone(local_timezone)
+    target_local = datetime.combine(
+        current_local.date(),
+        target_time,
+        tzinfo=local_timezone,
+    )
+    return max((target_local - current_local).total_seconds(), 0.0)
 
 
 class WebhookDeliveryStatus(str, Enum):
@@ -503,8 +530,53 @@ class WebhookNotifier:
             add_panels(grouped.get("pangmen-topic-radar"))
             elements.append(_markdown("### AI 技术"))
             add_panels(grouped.get("pangmen-ai-tech-radar"))
-            elements.append(_markdown("## 🔥 今日运营热点"))
-            add_panels(grouped.get("pangmen-platform-trend-radar"))
+            trend_group = grouped.get("pangmen-platform-trend-radar")
+            leverage_items = []
+            watch_items = []
+            if trend_group is not None:
+                leverage_items = [
+                    view_item
+                    for view_item in trend_group.items
+                    if view_item.item.metadata.get("trend_pool", "leverage")
+                    == "leverage"
+                ]
+                watch_items = [
+                    view_item
+                    for view_item in trend_group.items
+                    if view_item.item.metadata.get("trend_pool") == "watch"
+                ]
+
+            def add_selected_panels(  # type: ignore[no-untyped-def]
+                view_items,
+                *,
+                show_score: bool,
+            ) -> None:
+                for view_item in view_items:
+                    score_suffix = (
+                        f" ⭐️ {view_item.score}/10"
+                        if show_score and view_item.score != "?"
+                        else ""
+                    )
+                    elements.append(
+                        _collapsible_panel(
+                            f"{view_item.index}. {view_item.title}{score_suffix}",
+                            _format_markdown_for_webhook(
+                                summarizer.generate_webhook_item(
+                                    view_item.item,
+                                    language=lang,
+                                    index=view_item.index,
+                                    total=view_item.group_count,
+                                    title=view_item.title,
+                                    score=view_item.score,
+                                )
+                            ),
+                        )
+                    )
+
+            elements.append(_markdown("## 🔥 今日可借势热点"))
+            add_selected_panels(leverage_items, show_score=True)
+            elements.append(_markdown("## 👀 今日大盘热点观察"))
+            add_selected_panels(watch_items, show_score=False)
         else:
             for group in view.groups:
                 if topic_radar:
@@ -937,6 +1009,29 @@ class WebhookNotifier:
                 f"(filtered by webhook.languages)"
             )
             return []
+
+        not_before = os.getenv(WEBHOOK_NOT_BEFORE_ENV, "").strip()
+        if not_before:
+            timezone_name = os.getenv(WEBHOOK_TIMEZONE_ENV, "Asia/Shanghai").strip()
+            try:
+                delay_seconds = _seconds_until_local_delivery(
+                    not_before,
+                    timezone_name,
+                )
+            except (ValueError, ZoneInfoNotFoundError) as exc:
+                logger.warning(
+                    "Ignoring invalid webhook delivery window %r in timezone %r: %s",
+                    not_before,
+                    timezone_name,
+                    exc,
+                )
+            else:
+                if delay_seconds > 0:
+                    self.console.print(
+                        f"{self.icons['webhook']} Summary ready; waiting until "
+                        f"{not_before} {timezone_name} before delivery..."
+                    )
+                    await asyncio.sleep(delay_seconds)
 
         self.console.print(
             f"{self.icons['webhook']} Sending {lang.upper()} webhook notification..."

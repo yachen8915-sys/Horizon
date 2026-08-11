@@ -1,6 +1,10 @@
 name: Daily Horizon Summary
+run-name: Daily Horizon Summary (${{ github.event_name == 'schedule' && 'scheduled' || inputs.run_mode }})
 
 on:
+  schedule:
+    # GitHub cron uses UTC. 01:15 UTC = 09:15 Asia/Shanghai.
+    - cron: "15 1 * * *"
   workflow_dispatch:
     inputs:
       run_mode:
@@ -12,9 +16,14 @@ on:
           - full
           - webhook_test
 
+concurrency:
+  group: horizon-daily-summary-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   daily-summary:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write  # Needed to commit changes
 
@@ -39,7 +48,7 @@ jobs:
         run: cp data/config.github.json data/config.json
 
       - name: Run Horizon
-        if: inputs.run_mode != 'webhook_test'
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           # Map secrets to environment variables expected by config.json
           # Modify these based on your data/config.github.json provider settings
@@ -50,10 +59,12 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
+          HORIZON_WEBHOOK_NOT_BEFORE_LOCAL: "10:00"
+          HORIZON_WEBHOOK_TIMEZONE: "Asia/Shanghai"
         run: uv run horizon --hours 24
 
       - name: Send webhook connectivity test
-        if: inputs.run_mode == 'webhook_test'
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'webhook_test'
         env:
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
         run: uv run horizon-webhook --config data/config.github.json --lang zh

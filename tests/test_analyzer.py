@@ -221,6 +221,39 @@ def test_analysis_prompt_combines_common_rules_and_profile_policy():
     assert "# Output contract" in prompt
 
 
+def test_platform_trend_analysis_uses_independent_operations_and_content_scores():
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return json.dumps(
+            {
+                "score": 5,
+                "operations_score": 8.5,
+                "content_opportunity_score": 4.5,
+                "operations_reason": "大众娱乐奖项快速升温，运营团队需要关注。",
+                "reason": "运营价值高，但旁门内容机会暂时有限。",
+                "summary": "百花奖相关话题进入多个平台榜单。",
+                "tags": ["娱乐文化", "奖项"],
+            },
+            ensure_ascii=False,
+        )
+
+    item = _make_item("platform:hundred-flowers")
+    item.profile = "pangmen-platform-trend-radar"
+    item.title = "百花奖获奖名单"
+    asyncio.run(
+        ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
+    )
+
+    analysis = item.processing.analysis
+    assert '"operations_score"' in requests[0]["system"]
+    assert '"content_opportunity_score"' in requests[0]["system"]
+    assert analysis.operations_score == 8.5
+    assert analysis.content_opportunity_score == 4.5
+    assert analysis.score == 8.5
+
+
 def test_analyze_item_repairs_invalid_result_once():
     responses = iter(
         [

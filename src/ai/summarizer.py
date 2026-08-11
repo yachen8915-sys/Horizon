@@ -430,12 +430,40 @@ class DailySummarizer:
                     )
                 )
 
-        parts.append("## 🔥 今日运营热点\n\n")
         trend_group = groups.get(PLATFORM_TREND_RADAR_PROFILE_ID)
-        if not trend_group:
-            parts.append("今日暂无达到筛选标准的平台运营热点。\n")
+        trend_items = trend_group.items if trend_group else []
+        leverage_items = [
+            view_item
+            for view_item in trend_items
+            if view_item.item.metadata.get("trend_pool", "leverage") == "leverage"
+        ]
+        watch_items = [
+            view_item
+            for view_item in trend_items
+            if view_item.item.metadata.get("trend_pool") == "watch"
+        ]
+        parts.append("## 🔥 今日可借势热点\n\n")
+        if not leverage_items:
+            parts.append("今日暂无达到筛选标准的可借势热点。\n\n")
         else:
-            for view_item in trend_group.items:
+            for view_item in leverage_items:
+                parts.append(
+                    self._format_item(
+                        view_item.item,
+                        labels,
+                        language,
+                        view_item.index,
+                        heading_level=3,
+                        anchor_id=view_item.anchor_id,
+                        title_override=view_item.title,
+                        score_override=view_item.score,
+                    )
+                )
+        parts.append("## 👀 今日大盘热点观察\n\n")
+        if not watch_items:
+            parts.append("今日暂无达到筛选标准的大盘热点观察。\n")
+        else:
+            for view_item in watch_items:
                 parts.append(
                     self._format_item(
                         view_item.item,
@@ -1010,9 +1038,13 @@ class DailySummarizer:
             if item.processing and item.processing.analysis
             else "?"
         )
+        trend_pool = str(item.metadata.get("trend_pool") or "leverage")
+        analysis = item.processing.analysis if item.processing else None
         happened = self._compact_trend_brief(
             blocks.get("what_happened").content
             if blocks.get("what_happened")
+            else analysis.summary
+            if analysis and analysis.summary
             else item.content
         )
         def valid_angles(value: object) -> list[str]:
@@ -1051,31 +1083,47 @@ class DailySummarizer:
 
         lines = [
             f'<a id="{anchor_id or f"item-{index}"}"></a>',
-            f"### {title} ⭐️ {score}/10",
+            f"### {title}"
+            if trend_pool == "watch"
+            else f"### {title} ⭐️ {score}/10",
             "",
             f"**【热点简报】** {happened}",
         ]
-        if primary_angle:
+        if trend_pool == "watch":
+            operations_reason = (
+                analysis.operations_reason.strip()
+                if analysis and analysis.operations_reason
+                else self._default_platform_operations_reason(item)
+            )
+            lines.extend(
+                [
+                    "",
+                    "**【为什么值得运营注意】** "
+                    + _pangu(_escape_markdown(operations_reason)),
+                ]
+            )
+        elif primary_angle:
             lines.extend(
                 ["", f"**【主推角度】** {_pangu(_escape_markdown(primary_angle))}"]
             )
-        if backup_angle:
+        if trend_pool != "watch" and backup_angle:
             lines.extend(
                 ["", f"**【备选角度】** {_pangu(_escape_markdown(backup_angle))}"]
             )
         lines.extend(["", f"来源：{self._compact_trend_source(item)}"])
-
-        tags = (
-            item.processing.analysis.tags
-            if item.processing and item.processing.analysis
-            else []
-        )[:5]
-        if tags:
-            lines.extend(
-                ["", "标签：" + " ".join(f"#{_escape_markdown(tag)}" for tag in tags)]
-            )
         lines.extend(["", "---", ""])
         return "\n".join(lines)
+
+    @staticmethod
+    def _default_platform_operations_reason(item: ContentItem) -> str:
+        platforms = item.metadata.get("platforms") or [item.metadata.get("platform")]
+        platforms = [platform for platform in platforms if platform]
+        if len(set(platforms)) >= 2:
+            return "多平台同步出现，值得持续观察传播扩散。"
+        rank = item.metadata.get("rank")
+        if isinstance(rank, (int, float)) and rank <= 10:
+            return "平台榜单排名靠前，属于正在升温的大众话题。"
+        return "大众讨论度正在提高，值得运营团队持续观察。"
 
     def _format_compact_topic_card(
         self, item: ContentItem, index: int, anchor_id: Optional[str], title_override: Optional[str]

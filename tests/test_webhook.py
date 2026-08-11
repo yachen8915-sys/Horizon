@@ -25,6 +25,7 @@ from src.services.webhook import (
     WebhookDeliveryResult,
     WebhookNotifier,
     WebhookDeliveryStatus,
+    _seconds_until_local_delivery,
     _format_markdown_for_webhook,
     _prepare_variables_for_body,
     _render,
@@ -860,7 +861,63 @@ def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
 # ── send_daily_summary ──
 
 
+def test_seconds_until_local_delivery_waits_from_0930_to_1000():
+    now_utc = datetime(2026, 8, 11, 1, 30, tzinfo=timezone.utc)
+
+    assert (
+        _seconds_until_local_delivery(
+            "10:00",
+            "Asia/Shanghai",
+            now_utc=now_utc,
+        )
+        == 30 * 60
+    )
+
+
+def test_seconds_until_local_delivery_returns_zero_after_1000():
+    now_utc = datetime(2026, 8, 11, 2, 5, tzinfo=timezone.utc)
+
+    assert (
+        _seconds_until_local_delivery(
+            "10:00",
+            "Asia/Shanghai",
+            now_utc=now_utc,
+        )
+        == 0
+    )
+
+
 class TestSendDailySummary:
+    def test_summary_waits_for_configured_delivery_window(self, monkeypatch):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        monkeypatch.setenv("HORIZON_WEBHOOK_NOT_BEFORE_LOCAL", "10:00")
+        monkeypatch.setenv("HORIZON_WEBHOOK_TIMEZONE", "Asia/Shanghai")
+        config = WebhookConfig(enabled=True, url_env=_TEST_URL_ENV, delivery="summary")
+        notifier = WebhookNotifier(config)
+        sleep = AsyncMock()
+
+        with (
+            patch(
+                "src.services.webhook._seconds_until_local_delivery",
+                return_value=12.0,
+            ),
+            patch("src.services.webhook.asyncio.sleep", sleep),
+            patch.object(notifier, "notify", new_callable=AsyncMock),
+        ):
+            _run_async(
+                notifier.send_daily_summary(
+                    summary="中文摘要",
+                    important_items=[_make_item()],
+                    all_items_count=1,
+                    date="2026-08-11",
+                    lang="zh",
+                    summarizer=DailySummarizer(),
+                )
+            )
+
+        sleep.assert_awaited_once_with(12.0)
+        del os.environ[_TEST_URL_ENV]
+
     def test_failed_delivery_raises_error_for_the_orchestrator(self):
         """A rejected webhook response must fail the run instead of being ignored."""
         os.environ[_TEST_URL_ENV] = _TEST_URL
@@ -1199,10 +1256,15 @@ class TestSendDailySummary:
         trend = _make_item(title="平台热点", url="https://example.com/trend")
         trend.profile = "pangmen-platform-trend-radar"
         trend.processing.classification.profile = "pangmen-platform-trend-radar"
+        trend.metadata["trend_pool"] = "leverage"
+        watch = _make_item(title="百花奖获奖名单", url="https://example.com/watch")
+        watch.profile = "pangmen-platform-trend-radar"
+        watch.processing.classification.profile = "pangmen-platform-trend-radar"
+        watch.metadata["trend_pool"] = "watch"
 
         message = notifier.build_daily_summary_messages(
             summary="# Full summary",
-            important_items=[app, tech, trend],
+            important_items=[app, tech, trend, watch],
             all_items_count=50,
             date="2026-08-10",
             lang="zh",
@@ -1219,9 +1281,19 @@ class TestSendDailySummary:
             "## 🤖 今日 AI 资讯",
             "### AI 应用",
             "### AI 技术",
-            "## 🔥 今日运营热点",
+            "## 🔥 今日可借势热点",
+            "## 👀 今日大盘热点观察",
         ]
         assert all("Horizon" not in heading for heading in headings)
+        panels = [
+            element
+            for element in elements
+            if element.get("tag") == "collapsible_panel"
+        ]
+        watch_panel = next(
+            panel for panel in panels if "百花奖获奖名单" in str(panel)
+        )
+        assert "⭐️" not in str(watch_panel.get("header", {}))
         del os.environ[_TEST_URL_ENV]
 
     def test_feishu_empty_content_radar_keeps_pangmen_title(self):
@@ -1258,7 +1330,8 @@ class TestSendDailySummary:
         ]
         assert markdown[0] == "今日暂无达到筛选标准的重要更新。"
         assert "## 🤖 今日 AI 资讯" in markdown
-        assert "## 🔥 今日运营热点" in markdown
+        assert "## 🔥 今日可借势热点" in markdown
+        assert "## 👀 今日大盘热点观察" in markdown
         assert all("Horizon" not in block for block in markdown)
         del os.environ[_TEST_URL_ENV]
 

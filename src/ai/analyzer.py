@@ -234,6 +234,25 @@ class ContentAnalyzer:
                 )
             return
 
+        if profile.id == "pangmen-platform-trend-radar":
+            operations_score = (
+                result.operations_score
+                if result.operations_score is not None
+                else result.score
+            )
+            content_opportunity_score = (
+                result.content_opportunity_score
+                if result.content_opportunity_score is not None
+                else result.score
+            )
+            result = result.model_copy(
+                update={
+                    "score": operations_score,
+                    "operations_score": operations_score,
+                    "content_opportunity_score": content_opportunity_score,
+                }
+            )
+
         if item.processing:
             item.processing.analysis = result
 

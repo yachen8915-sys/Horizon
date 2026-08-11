@@ -639,6 +639,25 @@ def test_topic_radar_batch_reviews_and_repairs_generic_duplicate_angles():
     )
 
 
+def test_watch_pool_skips_angle_enrichment_without_ai_call():
+    class NoCallClient:
+        config = SimpleNamespace(enrichment_concurrency=1)
+
+        async def complete(self, **kwargs):
+            raise AssertionError("watch pool must not call enrichment AI")
+
+    item = make_item()
+    item.profile = "pangmen-platform-trend-radar"
+    item.processing.classification.profile = "pangmen-platform-trend-radar"
+    item.metadata["trend_pool"] = "watch"
+    enricher = ContentEnricher(NoCallClient(), PROFILES, ["zh"])
+
+    result = asyncio.run(enricher.enrich_batch([item]))
+
+    assert result.succeeded_ids == [item.id]
+    assert item.processing.artifacts == {}
+
+
 def test_topic_radar_angle_generation_is_chunked_before_global_audit():
     items = []
     for index in range(9):

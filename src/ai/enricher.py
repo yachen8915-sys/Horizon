@@ -254,7 +254,14 @@ class ContentEnricher:
         ) -> tuple[str, Optional[Exception]]:
             async with semaphore:
                 try:
-                    await self._enrich_item(item)
+                    is_platform_watch = (
+                        item.processing is not None
+                        and item.processing.classification.profile
+                        == "pangmen-platform-trend-radar"
+                        and item.metadata.get("trend_pool") == "watch"
+                    )
+                    if not is_platform_watch:
+                        await self._enrich_item(item)
                 except Exception as exc:
                     logger.error("Error enriching item %s: %s", item.id, exc)
                     return item.id, exc

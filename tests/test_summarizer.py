@@ -472,7 +472,7 @@ def test_generate_summary_uses_configured_profile_order():
     assert result.index("## Technology Blog") < result.index("## Financial News")
 
 
-def test_generate_content_radar_summary_uses_two_public_radars_and_three_subsections():
+def test_generate_content_radar_summary_splits_platform_trends_into_two_pools():
     app = _make_item(1)
     app.profile = "pangmen-topic-radar"
     app.processing.classification.profile = "pangmen-topic-radar"
@@ -482,6 +482,15 @@ def test_generate_content_radar_summary_uses_two_public_radars_and_three_subsect
     trend = _make_item(3)
     trend.profile = "pangmen-platform-trend-radar"
     trend.processing.classification.profile = "pangmen-platform-trend-radar"
+    trend.metadata["trend_pool"] = "leverage"
+    watch = _make_item(4)
+    watch.title = "百花奖获奖名单"
+    watch.profile = "pangmen-platform-trend-radar"
+    watch.processing.classification.profile = "pangmen-platform-trend-radar"
+    watch.processing.analysis.operations_score = 8.5
+    watch.processing.analysis.content_opportunity_score = 4.5
+    watch.processing.analysis.operations_reason = "娱乐文化热点快速上升。"
+    watch.metadata["trend_pool"] = "watch"
     summarizer = DailySummarizer(
         profile_names={
             "pangmen-topic-radar": {"zh": "AI 应用"},
@@ -497,7 +506,7 @@ def test_generate_content_radar_summary_uses_two_public_radars_and_three_subsect
 
     result = _run_async(
         summarizer.generate_summary(
-            [app, tech, trend],
+            [app, tech, trend, watch],
             date="2026-08-10",
             total_fetched=100,
             language="zh",
@@ -508,11 +517,51 @@ def test_generate_content_radar_summary_uses_two_public_radars_and_three_subsect
     assert "## 🤖 今日 AI 资讯" in result
     assert "### AI 应用" in result
     assert "### AI 技术" in result
-    assert "## 🔥 今日运营热点" in result
+    assert "## 🔥 今日可借势热点" in result
+    assert "## 👀 今日大盘热点观察" in result
     assert result.index("### AI 应用") < result.index("### AI 技术")
-    assert result.index("### AI 技术") < result.index("## 🔥 今日运营热点")
+    assert result.index("### AI 技术") < result.index("## 🔥 今日可借势热点")
+    assert result.index("## 🔥 今日可借势热点") < result.index("## 👀 今日大盘热点观察")
     assert "Horizon 每日速递" not in result
     assert "从 100 条内容中筛选" not in result
+
+
+def test_watch_pool_card_has_operations_reason_without_forced_angles():
+    trend = _make_item(5)
+    trend.title = "百花奖获奖名单"
+    trend.content = "微博榜单第 8 位，热度 851 万。"
+    trend.profile = "pangmen-platform-trend-radar"
+    trend.processing.classification.profile = "pangmen-platform-trend-radar"
+    trend.processing.analysis.operations_score = 8.5
+    trend.processing.analysis.content_opportunity_score = 4.5
+    trend.processing.analysis.operations_reason = "娱乐文化热点快速上升。"
+    trend.metadata.update(
+        {
+            "trend_pool": "watch",
+            "platform": "weibo",
+            "rank": 8,
+            "hot_value": 8_510_000,
+            "provider_name": "DailyHotAPI",
+        }
+    )
+    summarizer = DailySummarizer()
+
+    result = summarizer.generate_webhook_item(
+        trend,
+        language="zh",
+        index=1,
+        total=1,
+        title=trend.title,
+        score=8.5,
+    )
+
+    assert "百花奖获奖名单" in result
+    assert "【为什么值得运营注意】" in result
+    assert "娱乐文化热点快速上升" in result
+    assert "⭐️" not in result
+    assert "主推角度" not in result
+    assert "备选角度" not in result
+    assert "借势角度" not in result
 
 
 def test_platform_trend_card_keeps_only_brief_primary_backup_and_compact_source():
@@ -788,7 +837,8 @@ def test_empty_content_radar_does_not_fall_back_to_generic_horizon_summary():
     assert result.startswith("# 🔥 旁门每日内容雷达\n")
     assert "### AI 应用" in result
     assert "### AI 技术" in result
-    assert "## 🔥 今日运营热点" in result
+    assert "## 🔥 今日可借势热点" in result
+    assert "## 👀 今日大盘热点观察" in result
     assert "Horizon 每日速递" not in result
 
 

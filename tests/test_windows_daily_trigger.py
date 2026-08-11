@@ -58,6 +58,22 @@ def test_local_dispatcher_retries_after_a_failed_run() -> None:
     assert "DISPATCH full daily run" in result.stdout
 
 
+def test_local_dispatcher_ignores_a_webhook_connectivity_test() -> None:
+    result = run_trigger(
+        [
+            {
+                "created_at": "2026-08-08T00:30:00Z",
+                "status": "completed",
+                "conclusion": "success",
+                "display_title": "Daily Horizon Summary (webhook_test)",
+            }
+        ]
+    )
+
+    assert result.returncode == 0
+    assert "DISPATCH full daily run" in result.stdout
+
+
 def test_local_dispatcher_retries_a_transient_github_api_failure(tmp_path: Path) -> None:
     attempt_file = tmp_path / "attempts.txt"
     log_file = tmp_path / "trigger.log"
@@ -208,7 +224,14 @@ exit 0
     assert "SKIP successful run already exists" in result.stdout
 
 
-def test_registration_script_builds_both_daily_triggers_without_writing_task() -> None:
+def test_local_dispatcher_checks_scheduled_and_manual_workflow_runs() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert "runs?event=workflow_dispatch" not in script
+    assert "actions/workflows/$Workflow/runs?per_page=30" in script
+
+
+def test_registration_script_builds_0935_fallback_without_writing_task() -> None:
     result = subprocess.run(
         [
             "powershell.exe",
@@ -226,7 +249,8 @@ def test_registration_script_builds_both_daily_triggers_without_writing_task() -
     )
 
     assert result.returncode == 0
-    assert "09:15 and 09:35" in result.stdout
+    assert "09:35 fallback" in result.stdout
+    assert "09:15 and 09:35" not in result.stdout
     assert "including battery power" in result.stdout
     assert "3 task-level restarts" in result.stdout
     assert "persistent log" in result.stdout

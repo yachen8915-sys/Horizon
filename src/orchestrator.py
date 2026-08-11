@@ -3,6 +3,7 @@
 import asyncio
 import json
 import inspect
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,27 @@ _TRACKING_QUERY_PARAMETERS = {
     "ttclid",
     "twclid",
     "vero_id",
+}
+
+_PLATFORM_TREND_PROFILE_ID = "pangmen-platform-trend-radar"
+_CORE_TREND_PLATFORMS = {"weibo", "douyin", "xiaohongshu", "wechat"}
+_PLATFORM_TREND_LEVERAGE_THRESHOLD = 7.0
+_PLATFORM_TREND_BRAND_SAFETY_TERMS = {
+    "政治敏感",
+    "自然灾害",
+    "灾难",
+    "台风",
+    "地震",
+    "洪水",
+    "山火",
+    "重大事故",
+    "严重事故",
+    "伤亡",
+    "遇难",
+    "逝世",
+    "去世",
+    "身亡",
+    "离世",
 }
 
 
@@ -836,14 +858,7 @@ class HorizonOrchestrator:
         for item in items:
             if self.passes_profile_filter(item, threshold):
                 threshold_items.append(item)
-        threshold_items.sort(
-            key=lambda item: (
-                item.processing.analysis.score
-                if item.processing and item.processing.analysis and item.processing.analysis.score is not None
-                else -1
-            ),
-            reverse=True,
-        )
+        threshold_items.sort(key=self._selection_sort_key, reverse=True)
 
         if log:
             self.console.print(
@@ -870,16 +885,7 @@ class HorizonOrchestrator:
                     )
                 else:
                     deduped_items.extend(profile_items)
-            deduped_items.sort(
-                key=lambda item: (
-                    item.processing.analysis.score
-                    if item.processing
-                    and item.processing.analysis
-                    and item.processing.analysis.score is not None
-                    else -1
-                ),
-                reverse=True,
-            )
+            deduped_items.sort(key=self._selection_sort_key, reverse=True)
         topic_dedup_removed = len(threshold_items) - len(deduped_items)
 
         if log and topic_dedup_removed:
@@ -926,16 +932,7 @@ class HorizonOrchestrator:
             for item in candidates
             if self.passes_profile_filter(item, threshold)
         ]
-        eligible.sort(
-            key=lambda item: (
-                item.processing.analysis.score
-                if item.processing
-                and item.processing.analysis
-                and item.processing.analysis.score is not None
-                else -1
-            ),
-            reverse=True,
-        )
+        eligible.sort(key=self._selection_sort_key, reverse=True)
         balanced = self.apply_balanced_digest(eligible, log=log)
         return FilteringPipelineResult(
             items=balanced.items,
@@ -1030,10 +1027,132 @@ class HorizonOrchestrator:
         effective_threshold = threshold
         if effective_threshold is None and settings is not None:
             effective_threshold = settings.threshold
+        analysis = item.processing.analysis
+        if (
+            profile_id == _PLATFORM_TREND_PROFILE_ID
+            and self._is_platform_trend_brand_safety_excluded(item)
+        ):
+            item.metadata["trend_excluded_reason"] = "brand_safety"
+            return False
         if effective_threshold is None:
             return True
-        score = item.processing.analysis.score
+        score = (
+            analysis.operations_score
+            if profile_id == _PLATFORM_TREND_PROFILE_ID
+            and analysis.operations_score is not None
+            else analysis.score
+        )
         return score is not None and score >= effective_threshold
+
+    @staticmethod
+    def _is_platform_trend_brand_safety_excluded(item: ContentItem) -> bool:
+        analysis = item.processing.analysis if item.processing else None
+        signals = [item.title]
+        if analysis:
+            signals.extend(analysis.tags)
+        normalized = " ".join(str(signal) for signal in signals).lower()
+        return any(
+            term.lower() in normalized
+            for term in _PLATFORM_TREND_BRAND_SAFETY_TERMS
+        )
+
+    @staticmethod
+    def _platform_trend_heat_boost(item: ContentItem) -> float:
+        """Return a bounded heat signal used to break equal AI-score ties.
+
+        Rank is comparable across providers; raw hot values are not, so the
+        latter is log-scaled and combined conservatively. This signal never
+        bypasses the profile threshold or the AI relevance gate.
+        """
+        profile_id = (
+            item.processing.classification.profile if item.processing else item.profile
+        )
+        if profile_id != _PLATFORM_TREND_PROFILE_ID:
+            return 0.0
+
+        metadata = item.metadata
+        rank = metadata.get("rank")
+        rank_score = 0.0
+        if isinstance(rank, (int, float)) and not isinstance(rank, bool):
+            rank_score = 1.0 - min(max(float(rank) - 1.0, 0.0), 29.0) / 29.0
+
+        hot_value = metadata.get("hot_value")
+        if not isinstance(hot_value, (int, float)) or isinstance(hot_value, bool):
+            return 0.35 * rank_score
+        hot_score = min(
+            max(math.log10(max(float(hot_value), 0.0) + 1.0) / 8.0, 0.0),
+            1.0,
+        )
+        return 0.65 * hot_score + 0.35 * rank_score
+
+    @staticmethod
+    def _platform_source_priority(item: ContentItem) -> float:
+        profile_id = (
+            item.processing.classification.profile if item.processing else item.profile
+        )
+        if profile_id != _PLATFORM_TREND_PROFILE_ID:
+            return 0.0
+        if item.metadata.get("source_tier") == "core":
+            return 1.0
+        platforms = item.metadata.get("platforms") or [item.metadata.get("platform")]
+        if any(str(platform) in _CORE_TREND_PLATFORMS for platform in platforms):
+            return 1.0
+        return 0.0
+
+    @staticmethod
+    def _assign_platform_trend_pool(item: ContentItem) -> Optional[str]:
+        profile_id = (
+            item.processing.classification.profile if item.processing else item.profile
+        )
+        if profile_id != _PLATFORM_TREND_PROFILE_ID or not item.processing:
+            return None
+        analysis = item.processing.analysis
+        if analysis is None:
+            return None
+        operations_score = (
+            analysis.operations_score
+            if analysis.operations_score is not None
+            else analysis.score
+        )
+        content_score = (
+            analysis.content_opportunity_score
+            if analysis.content_opportunity_score is not None
+            else analysis.score
+        )
+        if operations_score is not None:
+            analysis.score = operations_score
+            analysis.operations_score = operations_score
+        if content_score is not None:
+            analysis.content_opportunity_score = content_score
+        pool = (
+            "leverage"
+            if content_score is not None
+            and content_score >= _PLATFORM_TREND_LEVERAGE_THRESHOLD
+            else "watch"
+        )
+        item.metadata["trend_pool"] = pool
+        return pool
+
+    @classmethod
+    def _selection_sort_key(cls, item: ContentItem) -> tuple[float, float, float]:
+        analysis = item.processing.analysis if item.processing else None
+        profile_id = (
+            item.processing.classification.profile if item.processing else item.profile
+        )
+        score = (
+            analysis.operations_score
+            if profile_id == _PLATFORM_TREND_PROFILE_ID
+            and analysis
+            and analysis.operations_score is not None
+            else analysis.score
+            if analysis and analysis.score is not None
+            else -1.0
+        )
+        return (
+            float(score),
+            cls._platform_source_priority(item),
+            cls._platform_trend_heat_boost(item),
+        )
 
     def apply_balanced_digest(
         self,
@@ -1055,15 +1174,23 @@ class HorizonOrchestrator:
         if not groups and max_items is None and not profile_limits:
             return BalancedDigestResult(items=items)
 
-        sorted_items = sorted(
-            items,
-            key=lambda item: (
-                item.processing.analysis.score
-                if item.processing and item.processing.analysis and item.processing.analysis.score is not None
-                else -1
-            ),
-            reverse=True,
-        )
+        for item in items:
+            self._assign_platform_trend_pool(item)
+
+        def digest_sort_key(item: ContentItem) -> tuple[float, float, float, float]:
+            profile_id = (
+                item.processing.classification.profile
+                if item.processing
+                else item.profile
+                if isinstance(item.profile, str)
+                else ""
+            )
+            return (
+                1.0 if profile_id in profile_limits else 0.0,
+                *self._selection_sort_key(item),
+            )
+
+        sorted_items = sorted(items, key=digest_sort_key, reverse=True)
 
         category_to_group: Dict[str, str] = {}
         duplicate_categories: List[str] = []
@@ -1086,6 +1213,7 @@ class HorizonOrchestrator:
         selected: List[tuple[ContentItem, str]] = []
         group_counts: Dict[str, int] = defaultdict(int)
         profile_counts: Dict[str, int] = defaultdict(int)
+        trend_pool_counts: Dict[str, int] = defaultdict(int)
         default_group = digest.default_group
 
         for item in sorted_items:
@@ -1117,9 +1245,24 @@ class HorizonOrchestrator:
             if profile_limit is not None and profile_counts[profile_id] >= profile_limit:
                 continue
 
+            if profile_id == _PLATFORM_TREND_PROFILE_ID:
+                trend_pool = str(item.metadata.get("trend_pool") or "watch")
+                trend_pool_limit = (
+                    digest.platform_trend_leverage_limit
+                    if trend_pool == "leverage"
+                    else digest.platform_trend_watch_limit
+                )
+                if (
+                    trend_pool_limit is not None
+                    and trend_pool_counts[trend_pool] >= trend_pool_limit
+                ):
+                    continue
+
             selected.append((item, group_key))
             group_counts[group_key] += 1
             profile_counts[profile_id] += 1
+            if profile_id == _PLATFORM_TREND_PROFILE_ID:
+                trend_pool_counts[str(item.metadata.get("trend_pool") or "watch")] += 1
 
         if max_items is not None:
             selected = selected[:max_items]

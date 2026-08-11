@@ -57,6 +57,8 @@ def test_newsnow_weibo_rank_and_provenance_enter_metadata():
     assert item.metadata["engagement"] == {"hot_value": 987654}
     assert item.metadata["provider"] == "newsnow"
     assert item.metadata["source_kind"] == "aggregator"
+    assert item.metadata["source_tier"] == "core"
+    assert item.metadata["provider_role"] == "core_collection"
     assert item.metadata["original_url"] == "https://s.weibo.com/weibo?q=hybrid"
 
 
@@ -91,6 +93,50 @@ def test_newsnow_douyin_without_hot_value_is_only_a_ranked_candidate():
     assert item.metadata["hot_value"] is None
     assert "榜单第 1 位" in item.content
     assert "全网爆火" not in item.content
+
+
+def test_alapi_non_core_platform_is_marked_supplemental_discovery():
+    client = AsyncMock()
+    client.post.return_value = _response(
+        {
+            "code": 200,
+            "data": {
+                "list": [
+                    {
+                        "title": "职场沟通新趋势",
+                        "url": "https://www.zhihu.com/question/example",
+                        "hot": 980000,
+                    }
+                ]
+            },
+        }
+    )
+    config = PlatformTrendsConfig(
+        enabled=True,
+        providers=[
+            PlatformTrendProviderConfig(
+                platform="zhihu",
+                provider="alapi_tophub",
+                base_url="https://v3.alapi.cn",
+                endpoint="/api/tophub",
+                request_method="POST",
+                response_adapter="alapi_tophub",
+                source_id="BMzQOL",
+                api_key_env="TEST_ALAPI_TOKEN",
+            )
+        ],
+    )
+
+    import os
+
+    os.environ["TEST_ALAPI_TOKEN"] = "test-token"
+    try:
+        item = asyncio.run(PlatformTrendsScraper(config, client).fetch(SINCE))[0]
+    finally:
+        del os.environ["TEST_ALAPI_TOKEN"]
+
+    assert item.metadata["source_tier"] == "supplemental"
+    assert item.metadata["provider_role"] == "supplemental_discovery"
 
 
 def test_one_platform_provider_failure_is_gracefully_skipped():

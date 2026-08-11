@@ -62,6 +62,9 @@ def make_orchestrator(digest: DigestConfig) -> HorizonOrchestrator:
                     threshold=4.0, topic_dedup=False
                 ),
                 "finance-news": ProfileSettingsConfig(threshold=7.0),
+                "pangmen-platform-trend-radar": ProfileSettingsConfig(
+                    threshold=7.0
+                ),
             }
         ),
     )
@@ -271,6 +274,249 @@ def test_platform_trends_share_dynamic_global_cap_with_ai_topics() -> None:
     assert trend_count > 6
     assert app_count > 0
     assert trend_count + app_count == 25
+
+
+def test_platform_trend_items_use_heat_as_a_tiebreaker() -> None:
+    filtering = DigestConfig(max_items=1)
+    lower_heat = make_item(
+        "trend-lower-heat",
+        6.0,
+        "platform-trend",
+        "pangmen-platform-trend-radar",
+    )
+    lower_heat.metadata.update({"platform": "weibo", "rank": 24, "hot_value": 390_286})
+    higher_heat = make_item(
+        "trend-higher-heat",
+        6.0,
+        "platform-trend",
+        "pangmen-platform-trend-radar",
+    )
+    higher_heat.metadata.update({"platform": "douyin", "rank": 9, "hot_value": 9_247_000})
+
+    result = make_orchestrator(filtering).apply_balanced_digest(
+        [lower_heat, higher_heat]
+    )
+
+    assert [item.id for item in result.items] == ["trend-higher-heat"]
+
+
+def _set_trend_scores(
+    item: ContentItem,
+    *,
+    operations: float,
+    content: float,
+) -> ContentItem:
+    item.processing.analysis.operations_score = operations
+    item.processing.analysis.content_opportunity_score = content
+    item.processing.analysis.score = operations
+    return item
+
+
+def test_high_operations_low_content_enters_watch_pool() -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-platform-trend-radar": 8},
+        platform_trend_leverage_limit=6,
+        platform_trend_watch_limit=4,
+    )
+    item = _set_trend_scores(
+        make_item(
+            "hundred-flowers-awards",
+            8.5,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8.5,
+        content=4.5,
+    )
+    item.title = "百花奖获奖名单"
+    item.metadata.update(
+        {"platform": "weibo", "rank": 8, "hot_value": 8_510_000}
+    )
+
+    result = make_orchestrator(filtering).apply_balanced_digest([item])
+
+    assert [entry.id for entry in result.items] == ["hundred-flowers-awards"]
+    assert result.items[0].metadata["trend_pool"] == "watch"
+
+
+def test_low_operations_high_content_does_not_pass_platform_threshold() -> None:
+    item = _set_trend_scores(
+        make_item(
+            "easy-ppt-low-heat",
+            6.0,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=6.0,
+        content=9.0,
+    )
+
+    assert make_orchestrator(DigestConfig()).passes_profile_filter(item) is False
+
+
+def test_high_heat_disaster_is_excluded_even_with_high_operations_score() -> None:
+    item = _set_trend_scores(
+        make_item(
+            "typhoon-risk",
+            8.0,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8.0,
+        content=5.0,
+    )
+    item.title = "台风白海豚突然大拐弯"
+    item.processing.analysis.tags = ["自然灾害", "公共安全"]
+
+    assert make_orchestrator(DigestConfig()).passes_profile_filter(item) is False
+    assert item.metadata["trend_excluded_reason"] == "brand_safety"
+
+
+def test_platform_pool_limits_are_independent_upper_bounds() -> None:
+    filtering = DigestConfig(
+        profile_limits={
+            "pangmen-topic-radar": 12,
+            "pangmen-ai-tech-radar": 5,
+            "pangmen-platform-trend-radar": 8,
+        },
+        max_items=25,
+        platform_trend_leverage_limit=6,
+        platform_trend_watch_limit=4,
+    )
+    items = [
+        make_item(f"app-{index}", 10 - index / 100, "ai", "pangmen-topic-radar")
+        for index in range(20)
+    ]
+    items.extend(
+        make_item(
+            f"tech-{index}",
+            9.5 - index / 100,
+            "ai-tech",
+            "pangmen-ai-tech-radar",
+        )
+        for index in range(10)
+    )
+    for index in range(6):
+        items.append(
+            _set_trend_scores(
+                make_item(
+                    f"leverage-{index}",
+                    8 - index / 100,
+                    "platform-trend",
+                    "pangmen-platform-trend-radar",
+                ),
+                operations=8 - index / 100,
+                content=8,
+            )
+        )
+    for index in range(6):
+        items.append(
+            _set_trend_scores(
+                make_item(
+                    f"watch-{index}",
+                    7 - index / 100,
+                    "platform-trend",
+                    "pangmen-platform-trend-radar",
+                ),
+                operations=7 - index / 100,
+                content=4,
+            )
+        )
+
+    result = make_orchestrator(filtering).apply_balanced_digest(items)
+    profiles = [entry.processing.classification.profile for entry in result.items]
+    platform_items = [
+        entry
+        for entry in result.items
+        if entry.processing.classification.profile
+        == "pangmen-platform-trend-radar"
+    ]
+
+    assert profiles.count("pangmen-topic-radar") == 12
+    assert profiles.count("pangmen-ai-tech-radar") == 5
+    assert len(platform_items) == 8
+    assert sum(entry.metadata["trend_pool"] == "leverage" for entry in platform_items) == 6
+    assert sum(entry.metadata["trend_pool"] == "watch" for entry in platform_items) == 2
+
+
+def test_supplemental_source_does_not_crowd_equal_value_core_source() -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-platform-trend-radar": 1},
+        platform_trend_leverage_limit=1,
+        platform_trend_watch_limit=1,
+    )
+    supplemental = _set_trend_scores(
+        make_item(
+            "zhihu-supplemental",
+            8,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8,
+        content=8,
+    )
+    supplemental.metadata.update(
+        {"platform": "zhihu", "source_tier": "supplemental", "rank": 1}
+    )
+    core = _set_trend_scores(
+        make_item(
+            "weibo-core",
+            8,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8,
+        content=8,
+    )
+    core.metadata.update(
+        {"platform": "weibo", "source_tier": "core", "rank": 8}
+    )
+
+    result = make_orchestrator(filtering).apply_balanced_digest(
+        [supplemental, core]
+    )
+
+    assert [entry.id for entry in result.items] == ["weibo-core"]
+
+
+def test_unconfigured_profiles_only_fill_space_left_by_independent_radar_caps() -> None:
+    filtering = DigestConfig(
+        max_items=3,
+        profile_limits={
+            "pangmen-topic-radar": 1,
+            "pangmen-platform-trend-radar": 2,
+        },
+        platform_trend_leverage_limit=2,
+        platform_trend_watch_limit=1,
+    )
+    generic = make_item("generic-high", 10, "other", "tech-news")
+    app = make_item("app", 8, "ai", "pangmen-topic-radar")
+    trend_one = _set_trend_scores(
+        make_item(
+            "trend-one",
+            7,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=7,
+        content=8,
+    )
+    trend_two = _set_trend_scores(
+        make_item(
+            "trend-two",
+            6,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=6,
+        content=8,
+    )
+
+    result = make_orchestrator(filtering).apply_balanced_digest(
+        [generic, app, trend_one, trend_two]
+    )
+
+    assert {entry.id for entry in result.items} == {"app", "trend-one", "trend-two"}
 
 
 def test_filter_items_skips_ai_topic_dedup_for_disabled_profile(monkeypatch) -> None:

@@ -69,6 +69,13 @@ class ContentAnalysis(BaseModel):
     """Profile-driven first-pass analysis."""
 
     score: Optional[float] = Field(default=None, ge=0, le=10, allow_inf_nan=False)
+    operations_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    content_opportunity_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    operations_reason: Optional[str] = None
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
@@ -720,6 +727,8 @@ class DigestConfig(BaseModel):
     default_group: str = "other"
     default_group_limit: Optional[int] = Field(default=None, gt=0)
     profile_limits: Dict[str, int] = Field(default_factory=dict)
+    platform_trend_leverage_limit: Optional[int] = Field(default=None, gt=0)
+    platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
     profile_order: List[str] = Field(default_factory=list)
 
     @field_validator("profile_limits")

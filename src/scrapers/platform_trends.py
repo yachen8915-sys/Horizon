@@ -164,6 +164,19 @@ class PlatformTrendsScraper(BaseScraper):
         raw_id = str(row.get("id") or title)
         hot_value = self._hot_value(row)
         provider_name = provider.provider_name or provider.provider
+        core_platform = provider.platform in {
+            "weibo",
+            "douyin",
+            "xiaohongshu",
+            "wechat",
+        }
+        source_tier = "core" if core_platform else "supplemental"
+        if provider.provider == "alapi_tophub" and core_platform:
+            provider_role = "cross_validation"
+        elif core_platform:
+            provider_role = "core_collection"
+        else:
+            provider_role = "supplemental_discovery"
         content = f"{provider.platform} 榜单第 {rank} 位；数据由 {provider_name} 聚合。"
         if hot_value is not None:
             content += f" 热度值：{hot_value}。"
@@ -198,6 +211,8 @@ class PlatformTrendsScraper(BaseScraper):
                 "providers": [provider_name],
                 "source_name": f"{provider.provider}:{provider.platform}",
                 "source_kind": "aggregator",
+                "source_tier": source_tier,
+                "provider_role": provider_role,
                 "reliability": provider.reliability,
                 "original_url": url,
                 "rank": rank,

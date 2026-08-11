@@ -157,7 +157,7 @@ def test_ai_tech_profile_rewards_capability_shifts_not_parameter_noise():
     }
 
 
-def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters():
+def test_platform_trend_profile_separates_operations_value_from_content_opportunity():
     profile = ProfileRegistry.load(
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
     ).get("pangmen-platform-trend-radar")
@@ -168,9 +168,12 @@ def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters(
     assert "时效" in profile.analysis_prompt
     assert "政治敏感" in profile.match_prompt
     assert "娱乐" in profile.match_prompt
-    assert "无自然连接" in profile.analysis_prompt
-    assert "借势自然度" in profile.analysis_prompt
-    assert "最高 4 分" in profile.analysis_prompt
+    assert "operations_score" in profile.analysis_prompt
+    assert "content_opportunity_score" in profile.analysis_prompt
+    assert "score 必须等于 operations_score" in profile.analysis_prompt
+    assert "内容机会不足不能直接淘汰" in profile.analysis_prompt
+    assert "今日大盘热点观察" in profile.analysis_prompt
+    assert "百花奖" in profile.analysis_prompt
     assert "投资建议" in profile.analysis_prompt
     assert "热点独有资产" in profile.analysis_prompt
     assert "热点爆点" in profile.analysis_prompt
@@ -180,6 +183,8 @@ def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters(
     assert "热点资产测试" in profile.analysis_prompt
     assert "内容结果测试" in profile.analysis_prompt
     assert "热点增益测试" in profile.analysis_prompt
+    assert "高热度公众话题优先" in profile.analysis_prompt
+    assert "热度优先于泛相关性" in profile.analysis_prompt
     assert "热点独有资产" in profile.enrichment_prompt
     assert "热点爆点" in profile.enrichment_prompt
     assert "4-6 个候选" in profile.enrichment_prompt
@@ -204,6 +209,22 @@ def test_platform_trend_profile_uses_heat_evidence_and_risk_not_keyword_filters(
     assert blocks["backup_angle"].optional is True
 
 
+def test_platform_trend_source_status_exposes_p0_gaps_and_supplemental_role():
+    status = (
+        Path(__file__).resolve().parents[1]
+        / "profiles"
+        / "pangmen-platform-trend-radar"
+        / "sources.md"
+    ).read_text(encoding="utf-8")
+
+    assert "微博" in status and "已接通" in status
+    assert "抖音" in status and "DailyHotAPI" in status
+    assert "小红书" in status and "P0 数据源缺口" in status
+    assert "微信" in status and "P0 数据源缺口" in status
+    assert "supplemental discovery" in status
+    assert "/tophub/site" in status
+
+
 def test_platform_trend_profile_keeps_three_regression_anchors():
     profile = ProfileRegistry.load(
         Path(__file__).resolve().parents[1] / "profiles", "tech-news"
@@ -212,7 +233,7 @@ def test_platform_trend_profile_keeps_three_regression_anchors():
     combined = profile.analysis_prompt + profile.enrichment_prompt
     assert "宇树科技 IPO" in combined
     assert "物流总额年均增长 5.7%" in combined
-    assert "5-6 分" in combined
+    assert "4–6" in combined
     assert "车企回归实体按键" in combined
     assert "AI 工具会不会也走同一条路" in combined
     assert "把资料交给两个 AI" in combined
