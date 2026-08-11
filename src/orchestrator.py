@@ -350,7 +350,16 @@ class HorizonOrchestrator:
             self.console.print("")
 
             # 6. Search related stories + enrich with background knowledge (2nd AI pass)
-            await self.enrich_items(important_items)
+            enrichment_result = await self.enrich_items(important_items)
+            if enrichment_result and enrichment_result.failures:
+                failed_ids = set(enrichment_result.failures)
+                important_items = [
+                    item for item in important_items if item.id not in failed_ids
+                ]
+                self.console.print(
+                    f"   Removed {len(failed_ids)} items that could not produce "
+                    "usable enrichment output\n"
+                )
 
             # 7. Generate and save daily summaries for each configured language
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

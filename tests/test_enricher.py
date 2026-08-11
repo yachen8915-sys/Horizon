@@ -1132,7 +1132,9 @@ def test_global_audit_rechecks_after_a_second_single_topic_regeneration():
         ["zh"],
         tools=FakeTools(),
     )
-    audit_results = iter([True, True, False])
+    # Repeatedly reporting that all angles were removed must not abort the
+    # whole batch; the latest locally validated angles remain usable.
+    audit_results = iter([True, True, True])
     audit_calls = 0
 
     async def keep_generated(items, language, result):
@@ -1150,3 +1152,56 @@ def test_global_audit_rechecks_after_a_second_single_topic_regeneration():
 
     assert audit_calls == 3
     assert result.final_count == 1
+
+
+def test_global_angle_audit_isolates_item_that_cannot_be_regenerated():
+    item = make_item().model_copy(
+        update={
+            "id": "bilibili:video:unrepairable-angle",
+            "title": "AI 猫爪提醒久坐",
+            "profile": "pangmen-topic-radar",
+        }
+    )
+    item.processing.classification.profile = "pangmen-topic-radar"
+    item.processing.artifacts["zh"] = ContentArtifact(
+        language="zh",
+        title=item.title,
+        blocks=[
+            ContentBlock(
+                id="recommended_angle",
+                type="section",
+                title="推荐切入点",
+                content="AI 猫爪拍打久坐用户，能否真正打断忘我工作？",
+            )
+        ],
+    )
+    enricher = ContentEnricher(
+        SimpleNamespace(complete=None),
+        PROFILES,
+        ["zh"],
+        tools=FakeTools(),
+    )
+
+    async def complete_model(*args, **kwargs):
+        return RecommendedAngleAudit(
+            removals=[
+                {
+                    "item_id": item.id,
+                    "angle": "AI 猫爪拍打久坐用户，能否真正打断忘我工作？",
+                    "issue_type": "generic",
+                    "reason": "test removal",
+                }
+            ]
+        )
+
+    async def regenerate(*args, **kwargs):
+        raise ValueError("no valid replacement")
+
+    enricher._complete_model = complete_model  # type: ignore[method-assign]
+    enricher._regenerate_one_item_angles = regenerate  # type: ignore[method-assign]
+    result = RecommendedAngleReviewResult()
+
+    asyncio.run(enricher._audit_recommended_angles([item], "zh", result))
+
+    assert result.failed_item_ids == [item.id]
+    assert item.processing.artifacts["zh"].blocks[0].content == ""

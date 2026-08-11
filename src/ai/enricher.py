@@ -124,6 +124,7 @@ class RecommendedAngleReviewResult:
     rejections: list[AngleRejection] = field(default_factory=list)
     audit_removals: list[AuditRemoval] = field(default_factory=list)
     regenerated_item_ids: list[str] = field(default_factory=list)
+    failed_item_ids: list[str] = field(default_factory=list)
     final_counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -283,10 +284,16 @@ class ContentEnricher:
         succeeded = {
             item_id for item_id in result.succeeded_ids
         }
-        await self.review_recommended_angles(
+        angle_review = await self.review_recommended_angles(
             [item for item in items if item.id in succeeded],
             language="zh",
         )
+        for item_id in angle_review.failed_item_ids:
+            if item_id in result.succeeded_ids:
+                result.succeeded_ids.remove(item_id)
+            result.failures[item_id] = (
+                "ValueError: no valid recommended angles after audit"
+            )
         return result
 
     async def review_recommended_angles(
@@ -315,15 +322,33 @@ class ContentEnricher:
             await self._generate_and_filter_angle_chunk(
                 chunk, language, result
             )
+        regenerated = False
         for _ in range(3):
-            regenerated = await self._audit_recommended_angles(
-                candidates, language, result
-            )
+            active_candidates = [
+                item for item in candidates
+                if item.id not in result.failed_item_ids
+            ]
+            if not active_candidates:
+                break
+            try:
+                regenerated = await self._audit_recommended_angles(
+                    active_candidates, language, result
+                )
+            except Exception as exc:
+                # A malformed/failed global audit must not abort the whole
+                # daily digest. Keep the latest locally validated angles and
+                # let the affected item continue with an audit warning.
+                logger.warning(
+                    "Recommended angle audit skipped after repeated failure: %s",
+                    exc,
+                )
+                break
             if not regenerated:
                 break
-        else:
-            raise ValueError(
-                "recommended angle audit repeatedly removed every angle for an item"
+        if regenerated:
+            logger.warning(
+                "Recommended angle audit reached retry limit; keeping the latest "
+                "locally validated angles."
             )
         result.final_counts = {
             item.id: len(
@@ -353,12 +378,22 @@ class ContentEnricher:
             )
             result.rejections.extend(rejected)
             if not kept:
-                kept = await self._regenerate_one_item_angles(
-                    item,
-                    language,
-                    result,
-                    "; ".join(rejection.reason for rejection in rejected),
-                )
+                try:
+                    kept = await self._regenerate_one_item_angles(
+                        item,
+                        language,
+                        result,
+                        "; ".join(rejection.reason for rejection in rejected),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Recommended angles unavailable for %s; skipping item: %s",
+                        item.id,
+                        exc,
+                    )
+                    if item.id not in result.failed_item_ids:
+                        result.failed_item_ids.append(item.id)
+                    kept = []
             filtered[item.id] = kept
         self._apply_reviewed_angles(items, language, filtered)
 
@@ -507,13 +542,25 @@ class ContentEnricher:
         for item in items:
             if remaining[item.id]:
                 continue
-            await self._regenerate_one_item_angles(
-                item,
-                language,
-                result,
-                "全量审计删除了该选题的全部候选，请生成全新且具体的角度。",
-            )
-            regenerated = True
+            try:
+                await self._regenerate_one_item_angles(
+                    item,
+                    language,
+                    result,
+                    "全量审计删除了该选题的全部候选，请生成全新且具体的角度。",
+                )
+                regenerated = True
+            except Exception as exc:
+                logger.warning(
+                    "Global angle audit could not repair %s; excluding item: %s",
+                    item.id,
+                    exc,
+                )
+                if item.id not in result.failed_item_ids:
+                    result.failed_item_ids.append(item.id)
+                self._apply_reviewed_angles(
+                    [item], language, {item.id: []}
+                )
         return regenerated
 
     def _filter_recommended_angle_candidates(
