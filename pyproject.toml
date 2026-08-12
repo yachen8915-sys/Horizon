@@ -42,6 +42,7 @@ horizon = "src.main:main"
 horizon-mcp = "src.mcp.server:main"
 horizon-wizard = "src.setup.wizard:main"
 horizon-webhook = "src.services.webhook_cli:main"
+horizon-platform-changes-smoke = "src.platform_changes_smoke:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import difflib
 import hashlib
 import json
@@ -51,6 +52,18 @@ _TRACKING_QUERY_PARAMETERS = {
     "ttclid",
 }
 _REMOVED_TAGS = ("script", "style", "noscript", "svg", "nav", "header", "footer")
+_PUBLIC_PAGE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+}
+_RETRYABLE_SEARCH_STATUSES = {
+    "resolution_failed",
+    "fetch_failed",
+    "unconfirmed",
+}
 
 
 def normalize_page_text(html_text: str, ignore_patterns: list[str] | None = None) -> str:
@@ -104,6 +117,7 @@ class PlatformChangesScraper(BaseScraper):
         self.pc_config = config
         self.state_path = Path(config.state_file)
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.last_watcher_results: list[dict[str, object]] = []
 
     async def fetch(self, since: datetime) -> list[ContentItem]:
         if not self.pc_config.enabled:
@@ -112,6 +126,7 @@ class PlatformChangesScraper(BaseScraper):
         state = self._load_state()
         watcher_states = state.setdefault("watchers", {})
         items: list[ContentItem] = []
+        self.last_watcher_results = []
         for watcher in self.pc_config.watchers:
             if not watcher.enabled:
                 continue
@@ -121,15 +136,42 @@ class PlatformChangesScraper(BaseScraper):
                     produced, updated = await self._fetch_index(watcher, watcher_state)
                 elif watcher.mode == "page_diff":
                     produced, updated = await self._fetch_page_diff(watcher, watcher_state)
-                else:
+                elif watcher.mode == "search_rss":
                     produced, updated = await self._fetch_search_rss(watcher, watcher_state)
+                elif watcher.mode == "xiaohongshu_rules":
+                    produced, updated = await self._fetch_xiaohongshu_rules(
+                        watcher, watcher_state
+                    )
+                else:
+                    produced, updated = await self._fetch_bilibili_bundle_diff(
+                        watcher, watcher_state
+                    )
                 watcher_states[watcher.name] = updated
                 items.extend(produced)
+                self.last_watcher_results.append(
+                    {
+                        "name": watcher.name,
+                        "mode": watcher.mode,
+                        "status": "ok",
+                        "item_count": len(produced),
+                        "baseline_created": watcher_state is None,
+                    }
+                )
             except Exception as exc:
                 logger.warning(
                     "Platform change watcher %s failed and was skipped: %s",
                     watcher.name,
                     exc,
+                )
+                self.last_watcher_results.append(
+                    {
+                        "name": watcher.name,
+                        "mode": watcher.mode,
+                        "status": "warning",
+                        "item_count": 0,
+                        "baseline_created": False,
+                        "warning": str(exc),
+                    }
                 )
 
         self._save_state(state)
@@ -193,6 +235,98 @@ class PlatformChangesScraper(BaseScraper):
             )
 
         current.update({"seen_urls": seen_urls, "last_seen": now.isoformat()})
+        return produced, current
+
+    async def _fetch_xiaohongshu_rules(
+        self,
+        watcher: PlatformChangeWatcherConfig,
+        watcher_state: dict | None,
+    ) -> tuple[list[ContentItem], dict]:
+        response = await self.client.post(
+            str(watcher.url),
+            json={"pageNo": 1, "pageSize": watcher.fetch_limit},
+            headers={
+                **_PUBLIC_PAGE_HEADERS,
+                "Referer": "https://school.xiaohongshu.com/newhome",
+                "Origin": "https://school.xiaohongshu.com",
+            },
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise ValueError("xiaohongshu public rules API returned an invalid response")
+        data = payload.get("data")
+        rows = data.get("dataList") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("xiaohongshu public rules API did not return dataList")
+
+        now = self._now()
+        current = dict(watcher_state or {})
+        seen_urls = self._normalized_seen_urls(current.get("seen_urls"))
+        is_baseline = watcher_state is None
+        produced: list[ContentItem] = []
+        for row in rows[: watcher.fetch_limit]:
+            if not isinstance(row, dict):
+                continue
+            article_id = str(row.get("articleId") or "").strip()
+            title = re.sub(r"\s+", " ", str(row.get("title") or "")).strip()
+            if not article_id or not title:
+                continue
+            detail_url = f"https://school.xiaohongshu.com/rule/detail/{article_id}"
+            if not self._matches_patterns(title, detail_url, watcher):
+                continue
+            url_key = normalize_monitor_url(detail_url)
+            if url_key in seen_urls:
+                continue
+            seen_urls[url_key] = now.isoformat()
+            if is_baseline:
+                continue
+            published_at = self._parse_public_date(
+                str(row.get("createTime") or ""), watcher
+            ) or now
+            dates = [
+                f"createTime={row.get('createTime')}" if row.get("createTime") else "",
+                (
+                    f"publishStartTime={row.get('publishStartTime')}"
+                    if row.get("publishStartTime")
+                    else ""
+                ),
+                (
+                    f"publishEndTime={row.get('publishEndTime')}"
+                    if row.get("publishEndTime")
+                    else ""
+                ),
+            ]
+            content = "\n".join([title, *(value for value in dates if value)])
+            produced.append(
+                self._make_item(
+                    watcher,
+                    subtype="xiaohongshu_rules",
+                    native_id=article_id,
+                    title=title,
+                    url=detail_url,
+                    content=content,
+                    published_at=published_at,
+                    metadata={
+                        "discovery_mode": "xiaohongshu_rules",
+                        "article_id": article_id,
+                        "published_at_basis": "createTime"
+                        if row.get("createTime")
+                        else "first_seen",
+                        "publish_start_time": row.get("publishStartTime"),
+                        "publish_end_time": row.get("publishEndTime"),
+                    },
+                )
+            )
+
+        current.update(
+            {
+                "seen_urls": seen_urls,
+                "last_seen": now.isoformat(),
+                "snapshot_kind": "xiaohongshu_rules",
+            }
+        )
         return produced, current
 
     async def _fetch_page_diff(
@@ -265,6 +399,131 @@ class PlatformChangesScraper(BaseScraper):
         )
         return [item], updated
 
+    async def _fetch_bilibili_bundle_diff(
+        self,
+        watcher: PlatformChangeWatcherConfig,
+        watcher_state: dict | None,
+    ) -> tuple[list[ContentItem], dict]:
+        page_response = await self.client.get(
+            str(watcher.url),
+            headers=_PUBLIC_PAGE_HEADERS,
+            follow_redirects=True,
+        )
+        page_response.raise_for_status()
+        soup = BeautifulSoup(page_response.text or "", "html.parser")
+        script_url = next(
+            (
+                urljoin(str(watcher.url), str(script.get("src")))
+                for script in soup.find_all("script", src=True)
+                if re.search(
+                    r"/convention/static/js/index\.[^/]+\.js(?:\?|$)",
+                    str(script.get("src")),
+                )
+            ),
+            None,
+        )
+        if not script_url:
+            raise ValueError("bilibili convention bundle URL was not found")
+        bundle_response = await self.client.get(
+            script_url,
+            headers=_PUBLIC_PAGE_HEADERS,
+            follow_redirects=True,
+        )
+        bundle_response.raise_for_status()
+        normalized = self._extract_bilibili_convention(bundle_response.text)
+        if len(normalized) < watcher.min_content_chars:
+            raise ValueError(
+                f"bilibili convention text is too short ({len(normalized)} chars)"
+            )
+
+        return self._diff_snapshot(
+            watcher,
+            watcher_state,
+            normalized=normalized,
+            snapshot_kind="bilibili_bundle",
+            discovery_mode="bilibili_bundle_diff",
+            source_url=script_url,
+        )
+
+    def _diff_snapshot(
+        self,
+        watcher: PlatformChangeWatcherConfig,
+        watcher_state: dict | None,
+        *,
+        normalized: str,
+        snapshot_kind: str,
+        discovery_mode: str,
+        source_url: str,
+    ) -> tuple[list[ContentItem], dict]:
+        now = self._now()
+        current_hash = self._hash(normalized)
+        if watcher_state is None or (
+            watcher_state.get("snapshot_kind")
+            and watcher_state.get("snapshot_kind") != snapshot_kind
+        ):
+            return [], {
+                "normalized_text_hash": current_hash,
+                "normalized_text": normalized,
+                "last_seen": now.isoformat(),
+                "last_changed": None,
+                "snapshot_kind": snapshot_kind,
+                "source_url": source_url,
+            }
+
+        previous_hash = str(watcher_state.get("normalized_text_hash") or "")
+        previous_text = str(watcher_state.get("normalized_text") or "")
+        updated = dict(watcher_state)
+        updated.update(
+            {
+                "last_seen": now.isoformat(),
+                "snapshot_kind": snapshot_kind,
+                "source_url": source_url,
+            }
+        )
+        if previous_hash == current_hash:
+            return [], updated
+
+        diff_lines = list(
+            difflib.unified_diff(
+                previous_text.splitlines(),
+                normalized.splitlines(),
+                fromfile="previous",
+                tofile="current",
+                lineterm="",
+            )
+        )
+        diff_excerpt = "\n".join(diff_lines)[:6_000]
+        updated.update(
+            {
+                "normalized_text_hash": current_hash,
+                "normalized_text": normalized,
+                "last_changed": now.isoformat(),
+            }
+        )
+        content = (
+            f"旧版关键文本：\n{previous_text[:8_000]}\n\n"
+            f"新版关键文本：\n{normalized[:8_000]}\n\n"
+            f"diff：\n{diff_excerpt}"
+        )
+        item = self._make_item(
+            watcher,
+            subtype=discovery_mode,
+            native_id=current_hash[:16],
+            title=f"{self._platform_label(watcher.platform)}公开页面发生变化：{watcher.name}",
+            url=str(watcher.url),
+            content=content,
+            published_at=now,
+            metadata={
+                "discovery_mode": discovery_mode,
+                "changed_at": now.isoformat(),
+                "previous_hash": previous_hash,
+                "current_hash": current_hash,
+                "diff_excerpt": diff_excerpt,
+                "source_snapshot_url": source_url,
+            },
+        )
+        return [item], updated
+
     async def _fetch_search_rss(
         self,
         watcher: PlatformChangeWatcherConfig,
@@ -286,7 +545,7 @@ class PlatformChangesScraper(BaseScraper):
             lookback_since
         )
         current = dict(watcher_state or {})
-        seen_urls = self._normalized_seen_urls(current.get("seen_urls"))
+        seen_urls = self._normalized_search_entries(current.get("seen_urls"))
         is_baseline = watcher_state is None
         produced: list[ContentItem] = []
         for discovered_item in discovered[: watcher.fetch_limit]:
@@ -299,19 +558,54 @@ class PlatformChangesScraper(BaseScraper):
                 continue
             url = str(discovered_item.url)
             url_key = normalize_monitor_url(url)
-            if url_key in seen_urls:
-                continue
-            seen_urls[url_key] = now.isoformat()
+            actual_change_at = self._extract_actual_change_at(text, watcher, now)
+            fingerprint = self._search_discovery_fingerprint(
+                discovered_item, actual_change_at
+            )
+            previous = seen_urls.get(url_key)
+            if previous is not None:
+                previous_fingerprint = str(previous.get("fingerprint") or "")
+                previous_status = str(previous.get("status") or "")
+                if not previous_fingerprint:
+                    previous.update(
+                        {
+                            "last_seen": now.isoformat(),
+                            "fingerprint": fingerprint,
+                            "status": "baseline",
+                        }
+                    )
+                    continue
+                if (
+                    previous_fingerprint == fingerprint
+                    and previous_status not in _RETRYABLE_SEARCH_STATUSES
+                ):
+                    previous["last_seen"] = now.isoformat()
+                    continue
+
+            first_seen = (
+                str(previous.get("first_seen") or now.isoformat())
+                if previous is not None
+                else now.isoformat()
+            )
+            entry = {
+                "first_seen": first_seen,
+                "last_seen": now.isoformat(),
+                "fingerprint": fingerprint,
+                "status": "baseline" if is_baseline else "candidate_emitted",
+            }
+            seen_urls[url_key] = entry
             if is_baseline or watcher.source_level == "unverified":
                 continue
 
-            actual_change_at = self._extract_actual_change_at(text, watcher, now)
             if actual_change_at is not None and actual_change_at < lookback_since:
+                entry["status"] = "old_change"
                 continue
 
             source_level, attribution = self._resolve_discovery_level(
                 watcher, discovered_item
             )
+            if actual_change_at is None:
+                entry["status"] = "unconfirmed"
             metadata = {
                 "discovery_mode": "search_rss",
                 "discovery_source": "google_news",
@@ -373,6 +667,46 @@ class PlatformChangesScraper(BaseScraper):
         return rows
 
     @staticmethod
+    def _extract_bilibili_convention(bundle_text: str) -> str:
+        for match in re.finditer(
+            r"JSON\.parse\('(?P<payload>\[\{.*?contentXML.*?\}\])'\)",
+            bundle_text or "",
+            flags=re.DOTALL,
+        ):
+            try:
+                decoded = ast.literal_eval("'" + match.group("payload") + "'")
+                sections = json.loads(decoded)
+            except (SyntaxError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(sections, list):
+                continue
+            parts: list[str] = []
+            has_content = False
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                title = str(section.get("title") or "").strip()
+                if title:
+                    parts.append(title)
+                children = section.get("children")
+                if not isinstance(children, list):
+                    continue
+                for child in children:
+                    if not isinstance(child, dict):
+                        continue
+                    child_title = str(child.get("title") or "").strip()
+                    if child_title:
+                        parts.append(child_title)
+                    content_xml = str(child.get("contentXML") or "")
+                    content = normalize_page_text(content_xml)
+                    if content:
+                        has_content = True
+                        parts.append(content)
+            if has_content:
+                return "\n".join(parts)
+        raise ValueError("bilibili convention data was not found in the public bundle")
+
+    @staticmethod
     def _normalized_seen_urls(value: object) -> dict[str, str]:
         if not isinstance(value, dict):
             return {}
@@ -380,6 +714,73 @@ class PlatformChangesScraper(BaseScraper):
         for raw_url, first_seen in value.items():
             normalized.setdefault(normalize_monitor_url(str(raw_url)), str(first_seen))
         return normalized
+
+    @staticmethod
+    def _normalized_search_entries(value: object) -> dict[str, dict[str, str]]:
+        if not isinstance(value, dict):
+            return {}
+        normalized: dict[str, dict[str, str]] = {}
+        for raw_url, raw_entry in value.items():
+            url_key = normalize_monitor_url(str(raw_url))
+            if isinstance(raw_entry, dict):
+                entry = {
+                    str(key): str(item)
+                    for key, item in raw_entry.items()
+                    if item is not None
+                }
+                first_seen = entry.get("first_seen") or entry.get("last_seen") or ""
+                entry.setdefault("first_seen", first_seen)
+                entry.setdefault("last_seen", first_seen)
+                entry.setdefault("status", "candidate_emitted")
+            else:
+                timestamp = str(raw_entry)
+                entry = {
+                    "first_seen": timestamp,
+                    "last_seen": timestamp,
+                    "fingerprint": "",
+                    "status": "legacy",
+                }
+            normalized.setdefault(url_key, entry)
+        return normalized
+
+    @classmethod
+    def _search_discovery_fingerprint(
+        cls,
+        item: ContentItem,
+        actual_change_at: datetime | None,
+    ) -> str:
+        payload = {
+            "title": re.sub(r"\s+", " ", item.title).strip(),
+            "content": normalize_page_text(item.content or ""),
+            "article_published_at": cls._ensure_utc(item.published_at).isoformat(),
+            "actual_change_at": actual_change_at.isoformat()
+            if actual_change_at is not None
+            else None,
+        }
+        return cls._hash(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
+
+    @staticmethod
+    def _parse_public_date(
+        value: str, watcher: PlatformChangeWatcherConfig
+    ) -> datetime | None:
+        match = re.fullmatch(
+            r"(?P<year>20\d{2})[年/.-](?P<month>\d{1,2})[月/.-](?P<day>\d{1,2})日?",
+            value.strip(),
+        )
+        if not match:
+            return None
+        try:
+            local_value = datetime(
+                int(match.group("year")),
+                int(match.group("month")),
+                int(match.group("day")),
+                tzinfo=ZoneInfo(watcher.observed_timezone),
+            )
+        except ValueError:
+            return None
+        return local_value.astimezone(timezone.utc)
 
     @staticmethod
     def _extract_actual_change_at(

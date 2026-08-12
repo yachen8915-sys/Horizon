@@ -570,7 +570,13 @@ class PlatformChangeWatcherConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    mode: Literal["index", "page_diff", "search_rss"]
+    mode: Literal[
+        "index",
+        "page_diff",
+        "search_rss",
+        "xiaohongshu_rules",
+        "bilibili_bundle_diff",
+    ]
     platform: Literal["douyin", "xiaohongshu", "bilibili", "wechat"]
     enabled: bool = True
     url: Optional[HttpUrl] = None
@@ -598,7 +604,12 @@ class PlatformChangeWatcherConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_mode_inputs(self) -> "PlatformChangeWatcherConfig":
-        if self.mode in {"index", "page_diff"} and self.url is None:
+        if self.mode in {
+            "index",
+            "page_diff",
+            "xiaohongshu_rules",
+            "bilibili_bundle_diff",
+        } and self.url is None:
             raise ValueError(f"platform change watcher mode {self.mode} requires url")
         if self.mode == "search_rss" and not (self.query or "").strip():
             raise ValueError("platform change watcher mode search_rss requires query")

@@ -22,6 +22,8 @@ def test_workflow_starts_daily_at_0915_and_holds_delivery_until_1000():
     )
 
     assert "webhook_test" in workflow
+    assert "platform_changes_smoke" in workflow
+    assert "horizon-platform-changes-smoke" in workflow
     assert "horizon-webhook --config data/config.github.json --lang zh" in workflow
     assert "workflow_dispatch:" in workflow
     assert "run-name:" in workflow
@@ -32,6 +34,64 @@ def test_workflow_starts_daily_at_0915_and_holds_delivery_until_1000():
     assert "github.event_name == 'schedule' || inputs.run_mode == 'full'" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.run_mode == 'webhook_test'" in workflow
     assert "ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}" in workflow
+
+
+def test_scheduled_workflow_gates_all_expensive_or_external_steps_after_checkout():
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
+        encoding="utf-8"
+    )
+
+    gate = workflow.split("- name: Check for an earlier successful daily run", 1)[1]
+    assert "actions: read" in workflow
+    assert "id: daily_run_gate" in gate
+    assert "github.event_name == 'schedule'" in gate
+    assert "python scripts/check_daily_run_gate.py" in gate
+    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in gate
+
+    guarded_steps = (
+        "Set up Python",
+        "Install uv",
+        "Install dependencies",
+        "Prepare GitHub Actions config",
+        "Restore platform change state",
+        "Run Horizon",
+        "Save platform change state",
+        "Upload selection diagnostics",
+        "Set current date as environment variable",
+        "Deploy to GitHub Pages",
+    )
+    fail_closed_guard = (
+        "github.event_name != 'schedule' || "
+        "steps.daily_run_gate.outputs.should_run == 'true'"
+    )
+    for name in guarded_steps:
+        body = workflow.split(f"- name: {name}", 1)[1].split("- name:", 1)[0]
+        assert fail_closed_guard in body, name
+
+
+def test_platform_changes_smoke_restores_baseline_without_full_run_or_state_save():
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
+        encoding="utf-8"
+    )
+
+    smoke_restore = workflow.split(
+        "- name: Restore production platform change state for smoke", 1
+    )[1].split("- name:", 1)[0]
+    smoke_run = workflow.split("- name: Run platform changes smoke", 1)[1].split(
+        "- name:", 1
+    )[0]
+    save_state = workflow.split("- name: Save platform change state", 1)[1].split(
+        "- name:", 1
+    )[0]
+
+    assert "inputs.run_mode == 'platform_changes_smoke'" in smoke_restore
+    assert "key: platform-change-state-31554080940" in smoke_restore
+    assert "restore-keys:" not in smoke_restore
+    assert "fail-on-cache-miss: true" in smoke_restore
+    assert "--require-state" in smoke_run
+    assert "HORIZON_WEBHOOK_URL" not in smoke_run
+    assert "DEEPSEEK_API_KEY" not in smoke_run
+    assert "platform_changes_smoke" not in save_state
 
 
 def test_github_runtime_config_uses_independent_radar_upper_bounds():
@@ -120,8 +180,8 @@ def test_platform_change_radar_uses_public_watchers_and_persistent_action_state(
     assert source["lookback_days"] == 7
     assert source["state_file"] == "data/platform_change_state.json"
     watchers = {watcher["name"]: watcher for watcher in source["watchers"]}
-    assert watchers["xiaohongshu-public-index"]["mode"] == "index"
-    assert watchers["bilibili-community-convention"]["mode"] == "page_diff"
+    assert watchers["xiaohongshu-public-index"]["mode"] == "xiaohongshu_rules"
+    assert watchers["bilibili-community-convention"]["mode"] == "bilibili_bundle_diff"
     assert watchers["wechat-public-search"]["mode"] == "search_rss"
     assert watchers["wechat-public-search"]["source_level"] == "official_republished"
     assert "actions/cache/restore@v4" in workflow
@@ -129,7 +189,9 @@ def test_platform_change_radar_uses_public_watchers_and_persistent_action_state(
     assert "data/platform_change_state.json" in workflow
     assert workflow.index("Restore platform change state") < workflow.index("Run Horizon")
     assert workflow.index("Run Horizon") < workflow.index("Save platform change state")
-    assert (
-        "if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full')"
-        in workflow
-    )
+    save_state = workflow.split("- name: Save platform change state", 1)[1].split(
+        "- name:", 1
+    )[0]
+    assert "if: success()" in save_state
+    assert "steps.daily_run_gate.outputs.should_run == 'true'" in save_state
+    assert "github.event_name == 'schedule' || inputs.run_mode == 'full'" in save_state

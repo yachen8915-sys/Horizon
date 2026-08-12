@@ -657,11 +657,9 @@
         },
         {
           "name": "xiaohongshu-public-index",
-          "mode": "index",
+          "mode": "xiaohongshu_rules",
           "platform": "xiaohongshu",
-          "url": "https://school.xiaohongshu.com/newhome",
-          "include_patterns": ["helper/detail|规则|薯规|电商资讯|买手|直播|营销工具"],
-          "exclude_patterns": ["新商如何|怎么起号|商家案例|直播课"],
+          "url": "https://school.xiaohongshu.com/api/edith/governance/inform/rule/query_article_list_by_filter",
           "fetch_limit": 30,
           "change_types": ["operation", "ecommerce", "feature", "rule"],
           "source_level": "official"
@@ -678,7 +676,7 @@
         },
         {
           "name": "bilibili-community-convention",
-          "mode": "page_diff",
+          "mode": "bilibili_bundle_diff",
           "platform": "bilibili",
           "url": "https://member.bilibili.com/studio/convention/",
           "change_types": ["operation", "rule"],
