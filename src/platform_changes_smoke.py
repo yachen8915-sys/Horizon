@@ -97,7 +97,15 @@ async def run_platform_changes_smoke(
         "watchers": scraper.last_watcher_results,
         "detected_item_count": len(items),
         "detected_items": [
-            {"watcher": item.metadata.get("watcher"), "title": item.title}
+            {
+                "candidate_id": item.id,
+                "watcher": item.metadata.get("watcher"),
+                "discovery_mode": item.metadata.get("discovery_mode"),
+                "title": item.title,
+                "url": str(item.url),
+                "source_level": item.metadata.get("source_level"),
+                "trace": item.metadata.get("candidate_trace"),
+            }
             for item in items
         ],
         "ai_called": False,

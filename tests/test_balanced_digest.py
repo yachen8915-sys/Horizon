@@ -244,6 +244,55 @@ def test_semantic_dedup_keeps_provider_confirmation_separate_from_platforms(
     assert result[0].metadata["cross_platform_count"] == 1
 
 
+def test_semantic_dedup_does_not_merge_distinct_model_publishers(monkeypatch) -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.ai = AIConfig(
+        provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY"
+    )
+    deepseek = make_item(
+        "deepseek-v4", 9, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    deepseek.title = "DeepSeek V4 Pro 正式版发布"
+    nvidia = make_item(
+        "nvidia-model", 8, "platform-trend", "pangmen-platform-trend-radar"
+    )
+    nvidia.title = "英伟达最新开源大模型上线"
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            return '{"duplicates": [[0, 1]]}'
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([deepseek, nvidia], log=False)
+    )
+
+    assert [item.id for item in result] == ["deepseek-v4", "nvidia-model"]
+
+
+def test_semantic_dedup_ignores_invalid_and_overlapping_groups(monkeypatch) -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.ai = AIConfig(
+        provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY"
+    )
+    first = make_item("first", 9, "ai")
+    second = make_item("second", 8, "ai")
+    third = make_item("third", 7, "ai")
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            return '{"duplicates": [[0, 1], [true, 2], [1, 2], [99, 0]]}'
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([first, second, third], log=False)
+    )
+
+    assert [item.id for item in result] == ["first", "third"]
+
+
 def test_platform_trends_share_dynamic_global_cap_with_ai_topics() -> None:
     filtering = DigestConfig(max_items=25)
     items = [
@@ -594,6 +643,102 @@ def test_selection_diagnostics_records_why_analyzed_items_were_excluded() -> Non
             "analysis_reason": "test",
         },
     ]
+
+
+def test_selection_diagnostics_preserves_pipeline_exclusion_stages() -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    deduped = make_item("deduped", 8.0, "ai")
+    capped = make_item("capped", 8.0, "ai")
+    failed = make_item("failed", 8.0, "ai")
+
+    diagnostics = orchestrator.build_selection_diagnostics(
+        [deduped, capped, failed],
+        [],
+        exclusion_stages={
+            "deduped": "topic_dedup",
+            "capped": "digest_limit",
+            "failed": "enrichment_failed",
+        },
+    )
+
+    assert [row["stage"] for row in diagnostics["items"]] == [
+        "topic_dedup",
+        "digest_limit",
+        "enrichment_failed",
+    ]
+
+
+def test_selection_diagnostics_includes_platform_change_candidate_trace() -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    item = ContentItem(
+        id="platform_changes:page_diff:trace",
+        source_type=SourceType.PLATFORM_CHANGES,
+        title="平台规则变化",
+        url="https://official.example/rules",
+        published_at=datetime.now(timezone.utc),
+        profile="pangmen-platform-change-radar",
+        metadata={
+            "candidate_trace": {
+                "candidate_id": "platform_changes:page_diff:trace",
+                "watcher": "official-rules",
+                "discovery_mode": "page_diff",
+                "outcome": "pending",
+            }
+        },
+        processing=ProcessingResult(
+            classification=ClassificationResult(
+                profile="pangmen-platform-change-radar", method="source_override"
+            ),
+            analysis=ContentAnalysis(score=6.0, reason="below", summary="规则"),
+        ),
+    )
+
+    diagnostics = orchestrator.build_selection_diagnostics([item], [])
+
+    assert diagnostics["items"][0]["candidate_trace"]["candidate_id"] == item.id
+
+
+def test_run_refills_enrichment_failures_from_eligible_candidates(tmp_path, monkeypatch) -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="openai", model="test", api_key_env="TEST_API_KEY", languages=[]
+        ),
+        sources=SourcesConfig(),
+        digest=DigestConfig(max_items=1),
+    )
+    orchestrator = HorizonOrchestrator(config, SimpleNamespace())
+    first = make_item("first", 9.0, "ai")
+    fallback = make_item("fallback", 8.0, "ai")
+    enriched: list[str] = []
+
+    async def fetch_all_sources(since):  # type: ignore[no-untyped-def]
+        return [first, fallback]
+
+    async def analyze_content(input_items):  # type: ignore[no-untyped-def]
+        return input_items
+
+    async def merge_topic_duplicates(input_items, *, log=True):  # type: ignore[no-untyped-def]
+        return input_items
+
+    async def enrich_important_items(input_items):  # type: ignore[no-untyped-def]
+        enriched.extend(item.id for item in input_items)
+        if input_items[0].id == "first":
+            from src.ai.enricher import EnrichmentBatchResult
+
+            return EnrichmentBatchResult(failures={"first": "test failure"})
+        from src.ai.enricher import EnrichmentBatchResult
+
+        return EnrichmentBatchResult(succeeded_ids=[input_items[0].id])
+
+    monkeypatch.setattr(orchestrator, "fetch_all_sources", fetch_all_sources)
+    monkeypatch.setattr(orchestrator, "analyze_items", analyze_content)
+    monkeypatch.setattr(orchestrator, "merge_topic_duplicates", merge_topic_duplicates)
+    monkeypatch.setattr(orchestrator, "enrich_items", enrich_important_items)
+    monkeypatch.chdir(tmp_path)
+
+    asyncio.run(orchestrator.run())
+
+    assert enriched == ["first", "fallback"]
 
 
 def test_rejects_settings_for_unknown_profile() -> None:

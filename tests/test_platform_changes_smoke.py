@@ -74,15 +74,14 @@ def test_smoke_uses_temporary_state_and_preserves_v1_baseline(tmp_path: Path) ->
     assert report["ai_called"] is False
     assert report["webhook_sent"] is False
     assert report["detected_item_count"] == 0
-    assert report["watchers"] == [
-        {
-            "name": "xiaohongshu-public-index",
-            "mode": "xiaohongshu_rules",
-            "status": "ok",
-            "item_count": 0,
-            "baseline_created": True,
-        }
-    ]
+    watcher_report = report["watchers"][0]
+    assert watcher_report["name"] == "xiaohongshu-public-index"
+    assert watcher_report["mode"] == "xiaohongshu_rules"
+    assert watcher_report["status"] == "ok"
+    assert watcher_report["health_status"] == "baseline"
+    assert watcher_report["item_count"] == 0
+    assert watcher_report["content_count"] == 1
+    assert watcher_report["baseline_created"] is True
     asyncio.run(client.aclose())
 
 

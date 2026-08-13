@@ -5,6 +5,7 @@ TOPIC_DEDUP_SYSTEM = """You are a news deduplication assistant. Identify groups 
 Rules:
 - Group items ONLY if they report on the identical event (same product release, same incident, same announcement)
 - Items about the same product but different events are NOT duplicates ("Gemma 4 released" vs "Gemma 4 jailbroken")
+- Items about different companies, vendors, or model families are NOT duplicates, even when they are both model releases
 - Err on the side of keeping items separate when unsure"""
 
 TOPIC_DEDUP_USER = """The following news items have already been sorted by importance score (descending). Identify which items are duplicates of each other.

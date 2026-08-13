@@ -575,12 +575,14 @@ class PlatformChangeWatcherConfig(BaseModel):
         "page_diff",
         "search_rss",
         "xiaohongshu_rules",
+        "xiaohongshu_help_api",
         "bilibili_bundle_diff",
     ]
     platform: Literal["douyin", "xiaohongshu", "bilibili", "wechat"]
     enabled: bool = True
     url: Optional[HttpUrl] = None
     query: Optional[str] = None
+    api_role: str = "4"
     same_domain_only: bool = True
     include_patterns: List[str] = Field(default_factory=list)
     exclude_patterns: List[str] = Field(default_factory=list)
@@ -608,6 +610,7 @@ class PlatformChangeWatcherConfig(BaseModel):
             "index",
             "page_diff",
             "xiaohongshu_rules",
+            "xiaohongshu_help_api",
             "bilibili_bundle_diff",
         } and self.url is None:
             raise ValueError(f"platform change watcher mode {self.mode} requires url")

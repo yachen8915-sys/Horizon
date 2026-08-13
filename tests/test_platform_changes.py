@@ -119,11 +119,91 @@ def test_index_js_shell_without_public_anchors_is_not_marked_as_verified(tmp_pat
         )
     )
     config = _config(tmp_path, watcher)
-
-    assert _run(PlatformChangesScraper(config, client, now_provider=lambda: NOW)) == []
+    scraper = PlatformChangesScraper(config, client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
 
     state = json.loads(Path(config.state_file).read_text(encoding="utf-8"))
     assert "js-only-index" not in state["watchers"]
+    assert scraper.last_watcher_results[0]["status"] == "shell_page"
+    assert scraper.last_watcher_results[0]["content_count"] == 0
+    asyncio.run(client.aclose())
+
+
+def test_index_detects_app_shell_before_anchor_parsing(tmp_path: Path) -> None:
+    watcher = PlatformChangeWatcherConfig(
+        name="app-shell",
+        mode="index",
+        platform="xiaohongshu",
+        url="https://ec.xiaohongshu.com/ecommerce/official-info",
+        source_level="official",
+    )
+    client = _client(
+        lambda request: httpx.Response(
+            200, text="<!doctype html><html><body><div id='app'></div></body></html>", request=request
+        )
+    )
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    assert scraper.last_watcher_results[0]["status"] == "shell_page"
+    asyncio.run(client.aclose())
+
+
+def test_watcher_health_reports_baseline_and_no_change_content_counts(tmp_path: Path) -> None:
+    watcher = PlatformChangeWatcherConfig(
+        name="dated-page",
+        mode="page_diff",
+        platform="douyin",
+        url="https://open.douyin.com/rules",
+        source_level="official",
+        min_content_chars=5,
+    )
+    body = {"text": "创作者规则正文，持续有效。"}
+    client = _client(lambda request: httpx.Response(200, text=f"<main>{body['text']}</main>", request=request))
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    assert scraper.last_watcher_results[0]["status"] == "ok"
+    assert scraper.last_watcher_results[0]["health_status"] == "baseline"
+    assert scraper.last_watcher_results[0]["content_count"] == 1
+
+    assert _run(scraper) == []
+    assert scraper.last_watcher_results[0]["status"] == "no_change"
+    assert scraper.last_watcher_results[0]["health_status"] == "no_change"
+    assert scraper.last_watcher_results[0]["content_count"] == 1
+    asyncio.run(client.aclose())
+
+
+def test_candidate_trace_contains_fetch_identity_and_stage_slots(tmp_path: Path) -> None:
+    watcher = PlatformChangeWatcherConfig(
+        name="trace-page",
+        mode="page_diff",
+        platform="douyin",
+        url="https://open.douyin.com/rules",
+        source_level="official",
+        min_content_chars=5,
+    )
+    body = {"text": "创作者规则旧正文。"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"<main>{body['text']}</main>", request=request)
+
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    body["text"] = "创作者规则新正文，新增 AI 标识要求。"
+    items = _run(scraper)
+
+    trace = items[0].metadata["candidate_trace"]
+    assert trace["candidate_id"] == items[0].id
+    assert trace["watcher"] == "trace-page"
+    assert trace["discovery_mode"] == "page_diff"
+    assert trace["fetch"]["status"] == "kept"
+    assert set(trace) >= {
+        "candidate_id", "watcher", "discovery_mode", "fetch", "merge",
+        "analyze", "threshold", "dedup", "balance", "final",
+        "outcome", "reason", "merged_into_id",
+    }
     asyncio.run(client.aclose())
 
 
@@ -186,6 +266,126 @@ def test_xiaohongshu_rules_api_baselines_then_emits_only_new_articles(
     assert items[0].published_at == datetime(2026, 8, 11, 16, tzinfo=timezone.utc)
     assert items[0].metadata["discovery_mode"] == "xiaohongshu_rules"
     assert items[0].metadata["source_level"] == "official"
+    asyncio.run(client.aclose())
+
+
+def test_xiaohongshu_pgy_help_api_baselines_and_emits_new_rule_with正文(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        {
+            "shortcutId": "rule-1",
+            "title": "小红书社区公约2.0",
+            "updateTime": 1786545109751,
+            "directory": ["规则公告"],
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/menu"):
+            return httpx.Response(
+                200,
+                json={"success": True, "code": 0, "data": {"menuList": list(rows)}},
+                request=request,
+            )
+        assert request.url.path.endswith("/doc")
+        assert request.url.params["shortcutId"] in {"rule-1", "rule-2"}
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"shortcutId": "rule-1", "title": rows[0]["title"], "content": '{"children":[{"text":"公约正文"}]}'}
+            },
+            request=request,
+        )
+
+    watcher = PlatformChangeWatcherConfig(
+        name="xiaohongshu-pgy-rules",
+        mode="xiaohongshu_help_api",
+        platform="xiaohongshu",
+        url="https://pgy.xiaohongshu.com/api/pgy/help/menu",
+        source_level="official",
+        change_types=["rule", "ecommerce"],
+        fetch_limit=30,
+        api_role="4",
+    )
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+
+    assert _run(scraper) == []
+    rows.insert(0, {"shortcutId": "rule-2", "title": "蒲公英商业合作规则更新", "updateTime": 1786545200000, "directory": ["规则公告"]})
+    items = _run(scraper)
+
+    assert [item.title for item in items] == ["蒲公英商业合作规则更新"]
+    assert "公约正文" in items[0].content
+    assert items[0].metadata["source_level"] == "official"
+    assert items[0].metadata["discovery_mode"] == "xiaohongshu_help_api"
+    asyncio.run(client.aclose())
+
+
+def test_xiaohongshu_pgy_help_api_emits_same_id_when_title_changes(tmp_path: Path) -> None:
+    row = {"shortcutId": "rule-1", "title": "旧规则标题", "updateTime": 1, "directory": ["规则公告"]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/menu"):
+            return httpx.Response(200, json={"code": 0, "data": {"menuList": [dict(row)]}}, request=request)
+        return httpx.Response(200, json={"success": True, "data": {"content": '{"children":[{"text":"正文"}]}' }}, request=request)
+
+    watcher = PlatformChangeWatcherConfig(
+        name="pgy-change", mode="xiaohongshu_help_api", platform="xiaohongshu",
+        url="https://pgy.xiaohongshu.com/api/pgy/help/menu", source_level="official", api_role="4"
+    )
+    client = _client(handler)
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    row.update(title="新规则标题", updateTime=2)
+    items = _run(scraper)
+    assert [item.title for item in items] == ["新规则标题"]
+    assert items[0].metadata["changed_fields"] == ["title", "update_time"]
+    asyncio.run(client.aclose())
+
+
+def test_xiaohongshu_pgy_update_time_only_without_body_change_is_no_change(tmp_path: Path) -> None:
+    row = {"shortcutId": "rule-1", "title": "规则标题", "updateTime": 1, "directory": ["规则公告"]}
+    body = '{"children":[{"text":"稳定正文"}]}'
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/menu"):
+            return httpx.Response(200, json={"code": 0, "data": {"menuList": [dict(row)]}}, request=request)
+        return httpx.Response(200, json={"success": True, "data": {"content": body}}, request=request)
+    watcher = PlatformChangeWatcherConfig(name="pgy-time", mode="xiaohongshu_help_api", platform="xiaohongshu", url="https://pgy.xiaohongshu.com/api/pgy/help/menu", source_level="official", api_role="4")
+    client = _client(handler); scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    row["updateTime"] = 2
+    assert _run(scraper) == []
+    state = json.loads(Path(scraper.state_path).read_text(encoding="utf-8"))
+    assert state["watchers"]["pgy-time"]["seen_items"]["rule-1"]["update_time"] == 2
+    asyncio.run(client.aclose())
+
+
+def test_xiaohongshu_pgy_detail_failure_preserves_previous_hash(tmp_path: Path) -> None:
+    row = {"shortcutId": "rule-1", "title": "规则标题", "updateTime": 1, "directory": ["规则公告"]}
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/menu"):
+            return httpx.Response(200, json={"code": 0, "data": {"menuList": [dict(row)]}}, request=request)
+        return httpx.Response(200, json={"success": True, "data": {"content": '{"children":[{"text":"旧正文"}]}' }}, request=request)
+    watcher = PlatformChangeWatcherConfig(name="pgy-failure", mode="xiaohongshu_help_api", platform="xiaohongshu", url="https://pgy.xiaohongshu.com/api/pgy/help/menu", source_level="official", api_role="4")
+    client = _client(handler); scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    state_before = json.loads(Path(scraper.state_path).read_text(encoding="utf-8"))["watchers"]["pgy-failure"]["seen_items"]["rule-1"]
+    row["updateTime"] = 2
+    async def failing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, request=request)
+    awaitable = None
+    # replace transport for the detail request while keeping menu readable
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/menu"):
+            return httpx.Response(200, json={"code": 0, "data": {"menuList": [dict(row)]}}, request=request)
+        return httpx.Response(503, request=request)
+    asyncio.run(client.aclose()); client = _client(failing_handler); scraper = PlatformChangesScraper(_config(tmp_path, watcher), client, now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    assert scraper.last_watcher_results[0]["status"] == "warning"
+    state_after = json.loads(Path(scraper.state_path).read_text(encoding="utf-8"))["watchers"]["pgy-failure"]["seen_items"]["rule-1"]
+    assert state_after["fingerprint"] == state_before["fingerprint"]
     asyncio.run(client.aclose())
 
 
@@ -601,6 +801,46 @@ def test_search_rss_seen_state_normalizes_tracking_url_variants(
         "https://open.douyin.com/notice/42"
     ]
     asyncio.run(client.aclose())
+
+
+def test_search_rss_query_change_baselines_history_then_accepts_new_url(tmp_path: Path, monkeypatch) -> None:
+    rows = [_discovery_item("old", title="抖音历史规则更新", url="https://media.example/old", content="抖音规则更新")]
+    class StubGoogleNews:
+        def __init__(self, config, client):
+            pass
+        async def fetch(self, since):
+            return list(rows)
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(name="search", mode="search_rss", platform="douyin", query="扩展查询词", source_level="secondary")
+    state_path = tmp_path / "platform_change_state.json"
+    state_path.write_text(json.dumps({"version": 1, "watchers": {"search": {"seen_urls": {"https://media.example/already": {"status": "candidate_emitted"}}}}}), encoding="utf-8")
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), _client(lambda request: httpx.Response(500, request=request)), now_provider=lambda: NOW)
+    assert _run(scraper) == []
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["watchers"]["search"]["query_fingerprint"]
+    rows.append(_discovery_item("new", title="抖音新规则更新", url="https://media.example/new", content="抖音规则更新"))
+    assert [str(item.url) for item in _run(scraper)] == ["https://media.example/new"]
+    rows.append(_discovery_item("newer", title="抖音新功能上线", url="https://media.example/newer", content="抖音新功能上线"))
+    assert {str(item.url) for item in _run(scraper)} == {"https://media.example/new", "https://media.example/newer"}
+
+
+def test_search_rss_reports_url_dedup_and_qualified_candidates_separately(tmp_path: Path, monkeypatch) -> None:
+    rows = [
+        _discovery_item("old", title="抖音历史规则更新", url="https://media.example/old", content="抖音规则更新", published_at=NOW - timedelta(days=8)),
+        _discovery_item("irrelevant", title="天气预报", url="https://media.example/weather", content="天气预报"),
+        _discovery_item("fresh", title="抖音新功能上线", url="https://media.example/fresh", content="抖音新功能上线"),
+        _discovery_item("fresh-duplicate", title="抖音新功能上线", url="https://media.example/fresh?utm_source=x", content="抖音新功能上线"),
+    ]
+    class StubGoogleNews:
+        def __init__(self, config, client): pass
+        async def fetch(self, since): return list(rows)
+    monkeypatch.setattr("src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews)
+    watcher = PlatformChangeWatcherConfig(name="stats", mode="search_rss", platform="douyin", query="固定", source_level="secondary")
+    scraper = PlatformChangesScraper(_config(tmp_path, watcher), _client(lambda request: httpx.Response(500, request=request)), now_provider=lambda: NOW)
+    _run(scraper)
+    health = scraper.last_watcher_results[0]
+    assert health["url_dedup_count"] == 3
+    assert health["qualified_candidate_count"] == 0
 
 
 def test_search_rss_reprocesses_same_url_when_discovery_fingerprint_changes(

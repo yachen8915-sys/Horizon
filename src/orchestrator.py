@@ -4,6 +4,7 @@ import asyncio
 import json
 import inspect
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ import httpx
 from rich.console import Console
 
 from .console_icons import get_icons
-from .models import Config, ContentItem
+from .models import Config, ContentItem, SourceType
 from .storage.manager import StorageManager, safe_output_path
 from .services.email import EmailManager
 from .services.webhook import WebhookNotifier
@@ -78,6 +79,90 @@ _PLATFORM_TREND_BRAND_SAFETY_TERMS = {
     "身亡",
     "离世",
 }
+
+_TOPIC_ENTITY_ALIASES = {
+    "deepseek": "deepseek",
+    "英伟达": "nvidia",
+    "nvidia": "nvidia",
+    "openai": "openai",
+    "chatgpt": "openai",
+    "anthropic": "anthropic",
+    "claude": "anthropic",
+    "google": "google",
+    "gemini": "google",
+    "谷歌": "google",
+    "阿里": "alibaba",
+    "alibaba": "alibaba",
+    "通义": "alibaba",
+    "qwen": "alibaba",
+    "字节": "bytedance",
+    "豆包": "bytedance",
+    "minimax": "minimax",
+    "月之暗面": "moonshot",
+    "kimi": "moonshot",
+    "meta": "meta",
+    "llama": "meta",
+    "mistral": "mistral",
+    "xai": "xai",
+    "grok": "xai",
+    "百度": "baidu",
+    "文心": "baidu",
+    "智谱": "zhipu",
+    "glm": "zhipu",
+    "腾讯": "tencent",
+    "混元": "tencent",
+}
+_TOPIC_GENERIC_NAME_TOKENS = {
+    "ai", "api", "app", "model", "models", "pro", "release", "released",
+    "launch", "launched", "update", "updated", "official", "new", "open",
+    "source", "preview", "version", "v", "chat", "beta",
+}
+
+
+def _topic_entity_anchors(item: ContentItem) -> set[str]:
+    """Extract conservative vendor/product anchors used to validate AI dedup groups."""
+    analysis = item.processing.analysis if item.processing else None
+    text = " ".join(
+        str(value or "")
+        for value in (
+            item.title,
+            item.content,
+            analysis.summary if analysis else None,
+            " ".join(analysis.tags) if analysis else None,
+        )
+    ).lower()
+    anchors = set()
+    for alias, canonical in _TOPIC_ENTITY_ALIASES.items():
+        if re.fullmatch(r"[a-z0-9-]+", alias):
+            matched = re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text)
+        else:
+            matched = re.search(re.escape(alias), text)
+        if matched:
+            anchors.add(canonical)
+    return anchors
+
+
+def _topic_named_anchors(item: ContentItem) -> set[str]:
+    """Find explicit title names for unknown vendors/model families."""
+    tokens = re.findall(r"\b[A-Z][A-Za-z0-9.-]{2,}\b|\b[A-Za-z]+\d[\w.-]*\b", item.title)
+    return {
+        token.lower()
+        for token in tokens
+        if token.lower() not in _TOPIC_GENERIC_NAME_TOKENS
+    }
+
+
+def _topic_dedup_pair_is_compatible(primary: ContentItem, other: ContentItem) -> bool:
+    """Reject only clear vendor/entity conflicts; unknown pairs remain AI-judged."""
+    primary_entities = _topic_entity_anchors(primary)
+    other_entities = _topic_entity_anchors(other)
+    if primary_entities and other_entities:
+        return not primary_entities.isdisjoint(other_entities)
+    primary_names = _topic_named_anchors(primary)
+    other_names = _topic_named_anchors(other)
+    if primary_names and other_names:
+        return not primary_names.isdisjoint(other_names)
+    return True
 
 
 def _deduplication_url_key(url: str) -> tuple[str, str, str, str, Optional[int], str, str]:
@@ -170,6 +255,8 @@ class FilteringPipelineResult:
     topic_dedup_removed: int
     balanced_digest: BalancedDigestResult
     eligible_count: Optional[int] = None
+    eligible_items: List[ContentItem] = field(default_factory=list)
+    exclusion_stages: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -180,6 +267,7 @@ class SourceFetchOutcome:
     status: Literal["success", "empty", "failure"]
     items: List[ContentItem] = field(default_factory=list)
     error: Optional[str] = None
+    watcher_health: List[Dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         result: Dict[str, object] = {
@@ -189,6 +277,8 @@ class SourceFetchOutcome:
         }
         if self.error is not None:
             result["error"] = self.error
+        if self.watcher_health:
+            result["watchers"] = self.watcher_health
         return result
 
 
@@ -289,6 +379,33 @@ class HorizonOrchestrator:
         )
         self.last_fetch_report: Optional[FetchReport] = None
 
+    @staticmethod
+    def _update_candidate_trace(
+        item: ContentItem,
+        stage: str,
+        status: str,
+        reason: str | None = None,
+        *,
+        merged_into_id: str | None = None,
+    ) -> None:
+        """Update diagnostic-only trace for a platform-change candidate."""
+        if item.source_type != SourceType.PLATFORM_CHANGES:
+            return
+        trace = item.metadata.get("candidate_trace")
+        if not isinstance(trace, dict):
+            return
+        slot = trace.setdefault(stage, {})
+        if not isinstance(slot, dict):
+            slot = {}
+            trace[stage] = slot
+        slot.update({"status": status, "reason": reason})
+        if merged_into_id is not None:
+            slot["merged_into_id"] = merged_into_id
+            trace["merged_into_id"] = merged_into_id
+        if stage == "final":
+            trace["outcome"] = status
+            trace["reason"] = reason
+
     async def run(self, force_hours: int = None, resume_cache: str | None = None) -> None:
         """Execute the complete workflow.
 
@@ -354,14 +471,7 @@ class HorizonOrchestrator:
                 analyzed_items,
             )
             important_items = filtering_result.items
-            diagnostics = self.build_selection_diagnostics(
-                analyzed_items,
-                important_items,
-            )
-            diagnostics_path = self._save_selection_diagnostics(diagnostics)
-            self.console.print(
-                f"   Saved selection diagnostics: {diagnostics_path}"
-            )
+            exclusion_stages = dict(filtering_result.exclusion_stages)
 
             # Show per-sub-source selection breakdown
             selected_counts: Dict[str, int] = defaultdict(int)
@@ -373,16 +483,61 @@ class HorizonOrchestrator:
             self.console.print("")
 
             # 6. Search related stories + enrich with background knowledge (2nd AI pass)
-            enrichment_result = await self.enrich_items(important_items)
-            if enrichment_result and enrichment_result.failures:
-                failed_ids = set(enrichment_result.failures)
-                important_items = [
-                    item for item in important_items if item.id not in failed_ids
+            attempted_ids = {item.id for item in important_items}
+            failed_ids: set[str] = set()
+            enriched_ids: set[str] = set()
+            pending = list(important_items)
+            while pending:
+                enrichment_result = await self.enrich_items(pending)
+                batch_failed = set(enrichment_result.failed_ids) if enrichment_result else set()
+                batch_succeeded = (
+                    set(enrichment_result.succeeded_ids) - batch_failed
+                    if enrichment_result
+                    else {item.id for item in pending}
+                )
+                failed_ids.update(batch_failed)
+                enriched_ids.update(batch_succeeded)
+                for item_id in batch_failed:
+                    exclusion_stages[item_id] = "enrichment_failed"
+
+                available = [
+                    item
+                    for item in filtering_result.eligible_items
+                    if item.id not in failed_ids
                 ]
+                refill = self.apply_balanced_digest(available, log=False).items
+                pending = [
+                    item
+                    for item in refill
+                    if item.id not in enriched_ids and item.id not in attempted_ids
+                ]
+                attempted_ids.update(item.id for item in pending)
+                if not batch_failed:
+                    break
+
+            important_items = [
+                item
+                for item in self.apply_balanced_digest(
+                    [item for item in filtering_result.eligible_items if item.id not in failed_ids],
+                    log=False,
+                ).items
+                if item.id in enriched_ids
+            ]
+            if failed_ids:
                 self.console.print(
                     f"   Removed {len(failed_ids)} items that could not produce "
                     "usable enrichment output\n"
                 )
+
+            diagnostics = self.build_selection_diagnostics(
+                analyzed_items,
+                important_items,
+                exclusion_stages=exclusion_stages,
+            )
+            diagnostics_path = self._save_selection_diagnostics(diagnostics)
+            self.console.print(
+                f"   Saved selection diagnostics: {diagnostics_path}"
+            )
 
             # 7. Generate and save daily summaries for each configured language
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -694,6 +849,7 @@ class HorizonOrchestrator:
             source_name=name,
             status="success" if items else "empty",
             items=items,
+            watcher_health=list(getattr(scraper, "last_watcher_results", []) or []),
         )
 
     @staticmethod
@@ -772,6 +928,29 @@ class HorizonOrchestrator:
                         primary.content = (primary.content or "") + f"\n\n--- From {item.source_type.value} ---\n" + item.content
 
             primary.metadata["merged_sources"] = all_sources
+            primary_trace = primary.metadata.get("candidate_trace")
+            if isinstance(primary_trace, dict):
+                merged_candidates = primary_trace.setdefault("merged_candidate_ids", [])
+                merged_traces = primary_trace.setdefault("merged_candidate_traces", [])
+                if isinstance(merged_candidates, list):
+                    for candidate in group_copies:
+                        if candidate.id != primary.id and candidate.id not in merged_candidates:
+                            merged_candidates.append(candidate.id)
+                            candidate_trace = candidate.metadata.get("candidate_trace")
+                            if isinstance(merged_traces, list) and isinstance(candidate_trace, dict):
+                                merged_traces.append(candidate_trace)
+            for candidate in group_copies:
+                self._update_candidate_trace(candidate, "merge", "kept")
+            if len(group_copies) > 1:
+                for duplicate in group_copies:
+                    if duplicate.id != primary.id:
+                        self._update_candidate_trace(
+                            duplicate,
+                            "merge",
+                            "dropped",
+                            "same_normalized_url",
+                            merged_into_id=primary.id,
+                        )
             merged.append(primary)
 
         return merged
@@ -835,16 +1014,35 @@ class HorizonOrchestrator:
             if not isinstance(group, list) or len(group) < 2:
                 continue
             primary_idx = group[0]
-            if primary_idx < 0 or primary_idx >= len(items):
+            if (
+                not isinstance(primary_idx, int)
+                or isinstance(primary_idx, bool)
+                or primary_idx < 0
+                or primary_idx >= len(items)
+                or primary_idx in drop_indices
+            ):
                 continue
             primary = items[primary_idx]
             for dup_idx in group[1:]:
                 if not isinstance(dup_idx, int) or dup_idx < 0 or dup_idx >= len(items):
                     continue
+                if isinstance(dup_idx, bool):
+                    continue
                 if dup_idx == primary_idx:
                     continue
                 dup = items[dup_idx]
+                if not _topic_dedup_pair_is_compatible(primary, dup):
+                    if log:
+                        self.console.print(
+                            f"   [yellow]dedup: keep separate [{primary_idx}] "
+                            f"{primary.title} / [{dup_idx}] {dup.title} "
+                            "(entity conflict)[/yellow]"
+                        )
+                    continue
                 _merge_platform_occurrences(primary, dup)
+                self._update_candidate_trace(
+                    dup, "dedup", "dropped", "semantic_topic_duplicate", merged_into_id=primary.id
+                )
                 # Merge comments/content from the duplicate into the primary
                 if dup.content:
                     if not primary.content or dup.content not in primary.content:
@@ -873,6 +1071,9 @@ class HorizonOrchestrator:
         for item in items:
             if self.passes_profile_filter(item, threshold):
                 threshold_items.append(item)
+                self._update_candidate_trace(item, "threshold", "kept")
+            else:
+                self._update_candidate_trace(item, "threshold", "dropped", "below_profile_threshold")
         threshold_items.sort(key=self._selection_sort_key, reverse=True)
 
         if log:
@@ -914,12 +1115,19 @@ class HorizonOrchestrator:
             if apply_balance
             else BalancedDigestResult(items=deduped_items)
         )
+        exclusion_stages = {
+            item.id: "topic_dedup"
+            for item in threshold_items
+            if item.id not in {candidate.id for candidate in deduped_items}
+        }
         return FilteringPipelineResult(
             items=balanced_digest.items,
             threshold_count=len(threshold_items),
             topic_dedup_count=len(deduped_items),
             topic_dedup_removed=topic_dedup_removed,
             balanced_digest=balanced_digest,
+            eligible_items=list(deduped_items),
+            exclusion_stages=exclusion_stages,
         )
 
     async def select_digest_items(
@@ -949,6 +1157,20 @@ class HorizonOrchestrator:
         ]
         eligible.sort(key=self._selection_sort_key, reverse=True)
         balanced = self.apply_balanced_digest(eligible, log=log)
+        selected_ids = {item.id for item in balanced.items}
+        for item in eligible:
+            self._update_candidate_trace(
+                item,
+                "balance",
+                "kept" if item.id in selected_ids else "dropped",
+                None if item.id in selected_ids else "digest_limit",
+            )
+        exclusion_stages = {
+            item.id: "digest_limit"
+            for item in eligible
+            if item.id not in selected_ids
+        }
+        exclusion_stages = {**initial.exclusion_stages, **exclusion_stages}
         return FilteringPipelineResult(
             items=balanced.items,
             threshold_count=initial.threshold_count,
@@ -956,6 +1178,8 @@ class HorizonOrchestrator:
             topic_dedup_removed=initial.topic_dedup_removed,
             balanced_digest=balanced,
             eligible_count=len(eligible),
+            eligible_items=eligible,
+            exclusion_stages=exclusion_stages,
         )
 
     def build_selection_diagnostics(
@@ -963,6 +1187,7 @@ class HorizonOrchestrator:
         analyzed_items: List[ContentItem],
         selected_items: List[ContentItem],
         threshold: Optional[float] = None,
+        exclusion_stages: Optional[Dict[str, str]] = None,
     ) -> dict:
         """Return a compact, non-sensitive record for items excluded from a digest.
 
@@ -976,6 +1201,7 @@ class HorizonOrchestrator:
         rejected = []
         for item in analyzed_items:
             if item.id in selected_ids:
+                self._update_candidate_trace(item, "final", "kept")
                 continue
 
             analysis = item.processing.analysis if item.processing else None
@@ -998,12 +1224,31 @@ class HorizonOrchestrator:
                     "score": analysis.score if analysis else None,
                     "threshold": effective_threshold,
                     "stage": (
-                        "below_profile_threshold"
-                        if not self.passes_profile_filter(item, threshold)
-                        else "removed_after_threshold"
+                        (exclusion_stages or {}).get(item.id)
+                        or (
+                            "below_profile_threshold"
+                            if not self.passes_profile_filter(item, threshold)
+                            else "removed_after_threshold"
+                        )
                     ),
                     "analysis_reason": analysis.reason if analysis else None,
+                    **(
+                        {"candidate_trace": item.metadata["candidate_trace"]}
+                        if isinstance(item.metadata.get("candidate_trace"), dict)
+                        else {}
+                    ),
                 }
+            )
+            self._update_candidate_trace(
+                item,
+                "final",
+                "dropped",
+                (exclusion_stages or {}).get(item.id)
+                or (
+                    "below_profile_threshold"
+                    if not self.passes_profile_filter(item, threshold)
+                    else "removed_after_threshold"
+                ),
             )
 
         return {
@@ -1431,7 +1676,16 @@ class HorizonOrchestrator:
         ai_client = create_ai_client(self.config.ai)
         analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
 
-        return await analyzer.analyze_batch(items, checkpoint_path=checkpoint_path)
+        analyzed = await analyzer.analyze_batch(items, checkpoint_path=checkpoint_path)
+        for item in analyzed:
+            analysis = item.processing.analysis if item.processing else None
+            self._update_candidate_trace(
+                item,
+                "analyze",
+                "kept" if analysis and analysis.score is not None else "failed",
+                None if analysis and analysis.score is not None else (analysis.reason if analysis else "missing_analysis"),
+            )
+        return analyzed
 
     def _cache_path(self, stage: str) -> Path:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -148,6 +148,28 @@ def test_platform_change_source_is_independent_from_existing_radars(monkeypatch)
     assert orchestrator.last_fetch_report.outcomes[0].source_name == "Platform Changes"
 
 
+def test_platform_change_fetch_report_preserves_watcher_health(monkeypatch) -> None:
+    orchestrator = make_orchestrator()
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        sources=make_sources(platform_changes=SimpleNamespace(enabled=True)),
+        extractors={},
+    )
+    scraper = StubScraper([])
+    scraper.last_watcher_results = [
+        {"name": "xhs", "health_status": "no_change", "new_count": 0}
+    ]
+    monkeypatch.setattr(
+        "src.orchestrator.PlatformChangesScraper",
+        lambda config, client: scraper,
+    )
+
+    asyncio.run(orchestrator.fetch_all_sources(SINCE))
+
+    source = orchestrator.last_fetch_report.to_dict()["sources"][0]
+    assert source["watchers"][0]["name"] == "xhs"
+    assert source["watchers"][0]["health_status"] == "no_change"
+
+
 class StubScraper:
     def __init__(self, result=None, error: Exception | None = None):  # type: ignore[no-untyped-def]
         self.result = [] if result is None else result

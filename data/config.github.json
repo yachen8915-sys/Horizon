@@ -649,7 +649,7 @@
           "name": "douyin-public-search",
           "mode": "search_rss",
           "platform": "douyin",
-          "query": "(site:open.douyin.com OR site:school.jinritemai.com) (抖音 OR 抖音电商) (公告 OR 规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 创作者 OR 功能)",
+          "query": "(site:open.douyin.com OR site:school.jinritemai.com OR site:creator.douyin.com OR site:oceanengine.com) (抖音 OR 抖音电商 OR 巨量引擎 OR 抖音创作者中心 OR 巨量星图) (公告 OR 规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 创作者 OR 功能 OR AI生成内容 OR 商业推广 OR 广告 OR 带货 OR 直播 OR 数据)",
           "change_types": ["operation", "ecommerce", "feature", "rule"],
           "source_level": "secondary",
           "official_domains": ["open.douyin.com", "school.jinritemai.com"],
@@ -664,14 +664,27 @@
           "change_types": ["operation", "ecommerce", "feature", "rule"],
           "source_level": "official"
         },
-        {
-          "name": "xiaohongshu-public-search",
+      {
+        "name": "xiaohongshu-pgy-rules",
+        "mode": "xiaohongshu_help_api",
+        "platform": "xiaohongshu",
+        "url": "https://pgy.xiaohongshu.com/api/pgy/help/menu",
+        "api_role": "4",
+        "fetch_limit": 50,
+        "source_level": "official",
+        "change_types": ["rule", "ecommerce"],
+        "include_patterns": ["规则", "公告"],
+        "official_domains": ["pgy.xiaohongshu.com"],
+        "profile": "pangmen-platform-change-radar"
+      },
+      {
+        "name": "xiaohongshu-public-search",
           "mode": "search_rss",
           "platform": "xiaohongshu",
-          "query": "site:school.xiaohongshu.com (小红书 OR 薯规) (规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 电商资讯 OR 功能)",
+          "query": "(site:school.xiaohongshu.com OR site:ec.xiaohongshu.com OR site:pgy.xiaohongshu.com) (小红书 OR 薯规 OR 小红书电商学习中心 OR 小红书蒲公英 OR 小红书专业号 OR 创作者) (公告 OR 规则 OR 更新 OR 新增 OR 上线 OR 调整 OR 电商资讯 OR 功能 OR AI生成内容 OR 商业推广 OR 广告 OR 带货 OR 直播 OR 数据)",
           "change_types": ["operation", "ecommerce", "feature", "rule"],
           "source_level": "secondary",
-          "official_domains": ["school.xiaohongshu.com"],
+          "official_domains": ["school.xiaohongshu.com", "ec.xiaohongshu.com", "pgy.xiaohongshu.com"],
           "fetch_limit": 30
         },
         {
@@ -687,7 +700,7 @@
           "name": "bilibili-public-search",
           "mode": "search_rss",
           "platform": "bilibili",
-          "query": "(site:bilibili.com/opus OR site:member.bilibili.com) (哔哩哔哩创作中心 OR 哔哩哔哩UP主服务中心 OR B站) (公告 OR 规则 OR 功能 OR 更新 OR 上线 OR 创作者)",
+          "query": "(site:bilibili.com/opus OR site:member.bilibili.com OR site:space.bilibili.com) (哔哩哔哩社区公约 OR 创作公约 OR 哔哩哔哩创作中心 OR 哔哩哔哩UP主服务中心 OR B站 OR UP主) (公告 OR 规则 OR 功能 OR 更新 OR 上线 OR 创作者 OR AI标识 OR 商业推广 OR 直播 OR 数据)",
           "change_types": ["operation", "feature", "rule"],
           "source_level": "secondary",
           "official_domains": ["member.bilibili.com", "bilibili.com"],
@@ -706,7 +719,7 @@
           "name": "wechat-public-search",
           "mode": "search_rss",
           "platform": "wechat",
-          "query": "(微信公开课 OR 微信派) (视频号 OR 微信小店) (更新 OR 上线 OR 新增 OR 规则 OR 调整 OR 带货 OR 创作者 OR 功能)",
+          "query": "(微信公开课 OR 微信派 OR 视频号助手 OR 微信小店助手 OR 微信公众平台) (视频号 OR 微信小店 OR 创作者 OR 商业推广 OR 带货 OR 直播) (公告 OR 更新 OR 上线 OR 新增 OR 规则 OR 调整 OR 功能 OR AI标识 OR 数据)",
           "change_types": ["operation", "ecommerce", "feature", "rule"],
           "source_level": "official_republished",
           "attribution_keywords": ["微信公开课", "微信派"],
