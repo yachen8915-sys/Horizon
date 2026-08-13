@@ -65,6 +65,7 @@ jobs:
         run: cp data/config.github.json data/config.json
 
       - name: Restore platform change state
+        id: restore_platform_change_state
         if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
         uses: actions/cache/restore@v4
         with:
@@ -73,13 +74,24 @@ jobs:
           restore-keys: |
             platform-change-state-
 
+      - name: Report restored platform change cache key
+        if: steps.restore_platform_change_state.outcome == 'success'
+        run: echo "cache-matched-key=${{ steps.restore_platform_change_state.outputs.cache-matched-key }}"
+
       - name: Restore production platform change state for smoke
+        id: restore_platform_change_state_smoke
         if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'platform_changes_smoke'
         uses: actions/cache/restore@v4
         with:
           path: data/platform_change_state.json
-          key: platform-change-state-31554080940
+          key: platform-change-state-smoke-${{ github.run_id }}
+          restore-keys: |
+            platform-change-state-
           fail-on-cache-miss: true
+
+      - name: Report restored smoke cache key
+        if: steps.restore_platform_change_state_smoke.outcome == 'success'
+        run: echo "cache-matched-key=${{ steps.restore_platform_change_state_smoke.outputs.cache-matched-key }}"
 
       - name: Run Horizon
         if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
