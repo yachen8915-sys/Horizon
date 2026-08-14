@@ -778,6 +778,7 @@
     },
     "platform_trend_leverage_limit": 6,
     "platform_trend_watch_limit": 4,
+    "platform_trend_minimum_per_platform": 1,
     "profile_order": [
       "pangmen-topic-radar",
       "pangmen-ai-tech-radar",

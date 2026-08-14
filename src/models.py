@@ -827,6 +827,7 @@ class DigestConfig(BaseModel):
     profile_limits: Dict[str, int] = Field(default_factory=dict)
     platform_trend_leverage_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
+    platform_trend_minimum_per_platform: Optional[int] = Field(default=None, gt=0)
     profile_order: List[str] = Field(default_factory=list)
 
     @field_validator("profile_limits")

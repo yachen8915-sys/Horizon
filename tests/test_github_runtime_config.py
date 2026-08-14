@@ -85,8 +85,10 @@ def test_platform_changes_smoke_restores_baseline_without_full_run_or_state_save
     )[0]
 
     assert "inputs.run_mode == 'platform_changes_smoke'" in smoke_restore
-    assert "key: platform-change-state-31554080940" in smoke_restore
-    assert "restore-keys:" not in smoke_restore
+    assert "id: restore_platform_change_state_smoke" in smoke_restore
+    assert "key: platform-change-state-smoke-${{ github.run_id }}" in smoke_restore
+    assert "restore-keys: |" in smoke_restore
+    assert "platform-change-state-" in smoke_restore
     assert "fail-on-cache-miss: true" in smoke_restore
     assert "--require-state" in smoke_run
     assert "HORIZON_WEBHOOK_URL" not in smoke_run
@@ -114,6 +116,7 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert config["digest"]["max_items"] == 25
     assert config["digest"]["platform_trend_leverage_limit"] == 6
     assert config["digest"]["platform_trend_watch_limit"] == 4
+    assert config["digest"]["platform_trend_minimum_per_platform"] == 1
     assert config["sources"]["huggingface"]["enabled"] is True
 
     platform_providers = config["sources"]["platform_trends"]["providers"]

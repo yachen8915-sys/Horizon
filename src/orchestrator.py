@@ -1393,6 +1393,21 @@ class HorizonOrchestrator:
         item.metadata["trend_pool"] = pool
         return pool
 
+    @staticmethod
+    def _platform_trend_platforms(item: ContentItem) -> tuple[str, ...]:
+        """Return stable platform names for diversity-aware trend selection."""
+        raw_platforms = item.metadata.get("platforms")
+        if isinstance(raw_platforms, (list, tuple, set)):
+            values = raw_platforms
+        else:
+            values = [item.metadata.get("platform")]
+        platforms: list[str] = []
+        for value in values:
+            platform = str(value or "").strip().casefold()
+            if platform and platform not in platforms:
+                platforms.append(platform)
+        return tuple(platforms)
+
     @classmethod
     def _selection_sort_key(cls, item: ContentItem) -> tuple[float, float, float]:
         analysis = item.processing.analysis if item.processing else None
@@ -1476,21 +1491,21 @@ class HorizonOrchestrator:
         trend_pool_counts: Dict[str, int] = defaultdict(int)
         default_group = digest.default_group
 
-        for item in sorted_items:
+        def try_select(item: ContentItem) -> bool:
+            if max_items is not None and len(selected) >= max_items:
+                return False
             category = item.metadata.get("category")
             group_key = (
                 category_to_group.get(category, default_group)
                 if isinstance(category, str)
                 else default_group
             )
-
             if group_key in groups:
                 limit = groups[group_key].limit
             else:
                 limit = digest.default_group_limit
-
             if limit is not None and group_counts[group_key] >= limit:
-                continue
+                return False
 
             profile_id = (
                 item.processing.classification.profile
@@ -1503,8 +1518,9 @@ class HorizonOrchestrator:
             )
             profile_limit = profile_limits.get(profile_id)
             if profile_limit is not None and profile_counts[profile_id] >= profile_limit:
-                continue
+                return False
 
+            trend_pool = None
             if profile_id == _PLATFORM_TREND_PROFILE_ID:
                 trend_pool = str(item.metadata.get("trend_pool") or "watch")
                 trend_pool_limit = (
@@ -1516,13 +1532,45 @@ class HorizonOrchestrator:
                     trend_pool_limit is not None
                     and trend_pool_counts[trend_pool] >= trend_pool_limit
                 ):
-                    continue
+                    return False
 
             selected.append((item, group_key))
             group_counts[group_key] += 1
             profile_counts[profile_id] += 1
-            if profile_id == _PLATFORM_TREND_PROFILE_ID:
-                trend_pool_counts[str(item.metadata.get("trend_pool") or "watch")] += 1
+            if trend_pool is not None:
+                trend_pool_counts[trend_pool] += 1
+            return True
+
+        selected_objects: set[int] = set()
+        platform_minimum = digest.platform_trend_minimum_per_platform or 0
+        if platform_minimum > 0:
+            platform_counts: Dict[str, int] = defaultdict(int)
+            for item in sorted_items:
+                profile_id = (
+                    item.processing.classification.profile
+                    if item.processing
+                    else item.profile
+                    if isinstance(item.profile, str)
+                    else ""
+                )
+                if profile_id != _PLATFORM_TREND_PROFILE_ID:
+                    continue
+                platforms = self._platform_trend_platforms(item)
+                if not platforms or all(
+                    platform_counts[platform] >= platform_minimum
+                    for platform in platforms
+                ):
+                    continue
+                if try_select(item):
+                    selected_objects.add(id(item))
+                    for platform in platforms:
+                        platform_counts[platform] += 1
+
+        for item in sorted_items:
+            if id(item) in selected_objects:
+                continue
+            if try_select(item):
+                selected_objects.add(id(item))
 
         if max_items is not None:
             selected = selected[:max_items]

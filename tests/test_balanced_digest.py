@@ -528,6 +528,50 @@ def test_supplemental_source_does_not_crowd_equal_value_core_source() -> None:
     assert [entry.id for entry in result.items] == ["weibo-core"]
 
 
+def test_platform_trend_digest_keeps_one_candidate_per_platform() -> None:
+    filtering = DigestConfig(
+        max_items=4,
+        profile_limits={"pangmen-platform-trend-radar": 4},
+        platform_trend_leverage_limit=4,
+        platform_trend_watch_limit=4,
+        platform_trend_minimum_per_platform=1,
+    )
+    items = []
+    for index in range(4):
+        item = _set_trend_scores(
+            make_item(
+                f"douyin-{index}",
+                9.0 - index / 100,
+                "platform-trend",
+                "pangmen-platform-trend-radar",
+            ),
+            operations=9.0 - index / 100,
+            content=8.0,
+        )
+        item.metadata.update({"platform": "douyin", "rank": index + 1})
+        items.append(item)
+    weibo = _set_trend_scores(
+        make_item(
+            "weibo-1",
+            8.5,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8.5,
+        content=8.0,
+    )
+    weibo.metadata.update({"platform": "weibo", "rank": 1})
+    items.append(weibo)
+
+    result = make_orchestrator(filtering).apply_balanced_digest(items)
+
+    assert {item.metadata["platform"] for item in result.items} == {
+        "douyin",
+        "weibo",
+    }
+    assert len(result.items) == 4
+
+
 def test_unconfigured_profiles_only_fill_space_left_by_independent_radar_caps() -> None:
     filtering = DigestConfig(
         max_items=3,
