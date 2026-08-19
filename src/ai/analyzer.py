@@ -18,6 +18,7 @@ from .prompting.analysis import analysis_system_prompt, analysis_user_prompt
 from .utils import parse_json_response
 from ..models import ClassificationResult, ContentAnalysis, ContentItem, ProcessingResult
 from ..processing.content import select_content, split_content
+from ..processing.editorial_selection import normalize_editorial_token
 from ..processing.profiles import ProfileRegistry
 
 DEFAULT_THROTTLE_SEC = 0.0
@@ -207,7 +208,14 @@ class ContentAnalyzer:
             user=user_prompt,
         )
 
-        result, failure = self._validate_analysis_response(response)
+        require_editorial = profile.id in {
+            "pangmen-topic-radar",
+            "pangmen-ai-tech-radar",
+        }
+        result, failure = self._validate_analysis_response(
+            response,
+            require_editorial=require_editorial,
+        )
         if result is None:
             repair_response = await self.client.complete(
                 system=analysis_system_prompt(profile),
@@ -218,7 +226,10 @@ class ContentAnalyzer:
                 ),
                 temperature=0,
             )
-            result, failure = self._validate_analysis_response(repair_response)
+            result, failure = self._validate_analysis_response(
+                repair_response,
+                require_editorial=require_editorial,
+            )
 
         if result is None:
             logger.warning(
@@ -284,6 +295,22 @@ class ContentAnalyzer:
             if change_time_unconfirmed:
                 updates["change_status"] = "实际变化时间待确认"
             result = result.model_copy(update=updates)
+        elif require_editorial:
+            primary_entity = normalize_editorial_token(result.primary_entity)
+            topic_cluster = normalize_editorial_token(result.topic_cluster)
+            use_case = normalize_editorial_token(result.use_case)
+            content_format = normalize_editorial_token(result.content_format)
+            result = result.model_copy(
+                update={
+                    "primary_entity": primary_entity,
+                    "topic_cluster": topic_cluster,
+                    "use_case": use_case,
+                    "event_key": normalize_editorial_token(result.event_key),
+                    "editorial_key": (
+                        f"{primary_entity}|{use_case}|{content_format}"
+                    ),
+                }
+            )
 
         if item.processing:
             item.processing.analysis = result
@@ -292,6 +319,8 @@ class ContentAnalyzer:
     def _validate_analysis_response(
         cls,
         response: str,
+        *,
+        require_editorial: bool = False,
     ) -> tuple[Optional[ContentAnalysis], str]:
         parsed = cls._parse_json_response(response)
         if not isinstance(parsed, dict):
@@ -304,4 +333,23 @@ class ContentAnalyzer:
             return None, f"invalid field {location or '<root>'}: {first_error['type']}"
         if result.score is None:
             return None, "score is required by the analysis contract"
+        if require_editorial:
+            for field_name in (
+                "primary_entity",
+                "topic_cluster",
+                "use_case",
+                "content_format",
+                "novelty_level",
+                "event_key",
+            ):
+                value = getattr(result, field_name)
+                if value is None or not str(value).strip():
+                    return None, f"{field_name} is required by the editorial contract"
+            for field_name in (
+                "relevance_score",
+                "novelty_score",
+                "demonstrability_score",
+            ):
+                if getattr(result, field_name) is None:
+                    return None, f"{field_name} is required by the editorial contract"
         return result, ""

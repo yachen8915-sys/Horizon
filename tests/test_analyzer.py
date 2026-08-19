@@ -221,6 +221,99 @@ def test_analysis_prompt_combines_common_rules_and_profile_policy():
     assert "# Output contract" in prompt
 
 
+@pytest.mark.parametrize(
+    "profile_id",
+    ["pangmen-topic-radar", "pangmen-ai-tech-radar"],
+)
+def test_ai_editorial_profiles_require_body_backed_structured_labels(profile_id):
+    prompt = analysis_system_prompt(PROFILES.get(profile_id))
+
+    for field in (
+        "primary_entity",
+        "topic_cluster",
+        "use_case",
+        "content_format",
+        "novelty_level",
+        "event_key",
+        "editorial_key",
+        "relevance_score",
+        "novelty_score",
+        "demonstrability_score",
+    ):
+        assert f'"{field}"' in prompt
+    assert "body evidence" in prompt
+    assert "title alone" in prompt
+
+
+@pytest.mark.parametrize(
+    "profile_id",
+    ["pangmen-platform-trend-radar", "pangmen-platform-change-radar"],
+)
+def test_non_editorial_radar_prompts_do_not_request_editorial_fields(profile_id):
+    prompt = analysis_system_prompt(PROFILES.get(profile_id))
+
+    assert '"primary_entity"' not in prompt
+    assert "For the editorial fields" not in prompt
+
+
+def test_topic_radar_repairs_missing_editorial_fields_and_normalizes_keys():
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "score": 8,
+                    "reason": "Useful feature",
+                    "summary": "Gemini added SAT practice tests.",
+                    "tags": ["Gemini"],
+                }
+            ),
+            json.dumps(
+                {
+                    "score": 8,
+                    "reason": "The body confirms a directly usable SAT feature.",
+                    "summary": "Gemini added full SAT practice tests.",
+                    "tags": ["Gemini", "SAT"],
+                    "primary_entity": "Gemini",
+                    "topic_cluster": "AI Education",
+                    "use_case": "SAT Practice",
+                    "content_format": "feature_update",
+                    "novelty_level": "material_update",
+                    "event_key": "Gemini:SAT practice tests:launch",
+                    "editorial_key": "model supplied value is ignored",
+                    "relevance_score": 9,
+                    "novelty_score": 8,
+                    "demonstrability_score": 9,
+                }
+            ),
+        ]
+    )
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    item = _make_item("rss:gemini:sat")
+    item.profile = "pangmen-topic-radar"
+    item.title = "Gemini 免费 SAT 模拟考"
+    item.content = (
+        "Google announced that Gemini now provides full-length SAT practice "
+        "tests with answer review for students."
+    )
+
+    asyncio.run(
+        ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
+    )
+
+    assert len(requests) == 2
+    analysis = item.processing.analysis
+    assert analysis.primary_entity == "gemini"
+    assert analysis.topic_cluster == "ai_education"
+    assert analysis.use_case == "sat_practice"
+    assert analysis.event_key == "gemini_sat_practice_tests_launch"
+    assert analysis.editorial_key == "gemini|sat_practice|feature_update"
+
+
 def test_platform_trend_analysis_uses_independent_operations_and_content_scores():
     requests = []
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from src.models import (
     ContentAnalysis,
     ContentItem,
     DigestConfig,
+    EditorialSelectionConfig,
     ProcessingConfig,
     ProcessingResult,
     ProfileSettingsConfig,
@@ -23,6 +25,7 @@ from src.models import (
 )
 from src.orchestrator import HorizonOrchestrator
 from src.processing import ProfileRegistry
+from src.processing.editorial_selection import EditorialSelector
 
 
 def make_item(
@@ -291,6 +294,60 @@ def test_semantic_dedup_ignores_invalid_and_overlapping_groups(monkeypatch) -> N
     )
 
     assert [item.id for item in result] == ["first", "third"]
+
+
+def test_semantic_dedup_records_exact_event_repeat_for_ai_profiles(monkeypatch) -> None:
+    orchestrator = make_orchestrator(DigestConfig())
+    orchestrator.config.ai = AIConfig(
+        provider="deepseek", model="deepseek-chat", api_key_env="TEST_KEY"
+    )
+    official = make_item(
+        "official-chatgpt-teens",
+        8,
+        "ai",
+        "pangmen-topic-radar",
+    )
+    repost = make_item(
+        "repost-chatgpt-teens",
+        7,
+        "ai",
+        "pangmen-topic-radar",
+    )
+    for item in (official, repost):
+        item.title = "ChatGPT for Teens 发布"
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": "chatgpt",
+                "topic_cluster": "ai_education",
+                "use_case": "teen_learning",
+                "content_format": "product_release",
+                "novelty_level": "major_release",
+                "event_key": "openai_chatgpt_for_teens_launch",
+                "editorial_key": "chatgpt|teen_learning|product_release",
+                "relevance_score": 8,
+                "novelty_score": 8,
+                "demonstrability_score": 8,
+            }
+        )
+    requests = []
+
+    class FakeAIClient:
+        async def complete(self, **kwargs):  # type: ignore[no-untyped-def]
+            requests.append(kwargs)
+            return '{"duplicates": [[0, 1]]}'
+
+    monkeypatch.setattr("src.orchestrator.create_ai_client", lambda config: FakeAIClient())
+
+    result = asyncio.run(
+        orchestrator.merge_topic_duplicates([official, repost], log=False)
+    )
+
+    assert [item.id for item in result] == ["official-chatgpt-teens"]
+    assert "Event key: openai_chatgpt_for_teens_launch" in requests[0]["user"]
+    assert repost.metadata["editorial_selection"] == {
+        "reason": "exact_event_repeat",
+        "replaced_by_id": "official-chatgpt-teens",
+    }
 
 
 def test_platform_trends_share_dynamic_global_cap_with_ai_topics() -> None:
@@ -632,6 +689,277 @@ def test_filter_items_skips_ai_topic_dedup_for_disabled_profile(monkeypatch) -> 
     )
 
     assert [item.id for item in result.items] == ["first", "second"]
+
+
+def test_filter_items_applies_editorial_diversity_before_balanced_digest(tmp_path) -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-topic-radar": 8},
+        editorial_selection=EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+        ),
+    )
+    orchestrator = make_orchestrator(filtering)
+    items = []
+    for item_id, relevance in (
+        ("gemini-bts", 7.0),
+        ("gemini-sat", 9.0),
+        ("gemini-chrome", 8.0),
+    ):
+        item = make_item(
+            item_id,
+            8.0,
+            "ai",
+            "pangmen-topic-radar",
+        )
+        item.metadata["feed_name"] = "google-ai"
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": "gemini",
+                "topic_cluster": f"topic-{item_id}",
+                "use_case": f"case-{item_id}",
+                "content_format": "feature_update",
+                "novelty_level": "material_update",
+                "event_key": f"event-{item_id}",
+                "editorial_key": f"gemini|case-{item_id}|feature_update",
+                "relevance_score": relevance,
+                "novelty_score": relevance,
+                "demonstrability_score": relevance,
+            }
+        )
+        items.append(item)
+
+    result = asyncio.run(
+        orchestrator.filter_items(
+            list(reversed(items)),
+            topic_dedup=False,
+            apply_balance=False,
+            log=False,
+        )
+    )
+
+    assert [item.id for item in result.items] == ["gemini-sat", "gemini-chrome"]
+    assert result.exclusion_stages["gemini-bts"] == "diversity_entity_limit"
+
+
+def test_editorial_diagnostics_include_selected_rows_labels_and_limit_details(tmp_path) -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-topic-radar": 8},
+        editorial_selection=EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+            primary_entity_limit=1,
+        ),
+    )
+    orchestrator = make_orchestrator(filtering)
+    selected = make_item("gemini-best", 8.0, "ai", "pangmen-topic-radar")
+    rejected = make_item("gemini-extra", 8.0, "ai", "pangmen-topic-radar")
+    for item, relevance in ((selected, 9.0), (rejected, 7.0)):
+        item.metadata["feed_name"] = "google-ai"
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": "gemini",
+                "topic_cluster": "ai_education",
+                "use_case": item.id,
+                "content_format": "feature_update",
+                "novelty_level": "material_update",
+                "event_key": f"event-{item.id}",
+                "editorial_key": f"gemini|{item.id}|feature_update",
+                "relevance_score": relevance,
+                "novelty_score": relevance,
+                "demonstrability_score": relevance,
+            }
+        )
+
+    filtered = asyncio.run(
+        orchestrator.filter_items(
+            [rejected, selected],
+            topic_dedup=False,
+            apply_balance=False,
+            log=False,
+        )
+    )
+    diagnostics = orchestrator.build_selection_diagnostics(
+        [selected, rejected],
+        filtered.items,
+        exclusion_stages=filtered.exclusion_stages,
+    )
+
+    row = diagnostics["items"][0]
+    assert row["stage"] == "diversity_entity_limit"
+    assert row["reason"] == "diversity_entity_limit"
+    assert row["primary_entity"] == "gemini"
+    assert row["topic_cluster"] == "ai_education"
+    assert row["use_case"] == "gemini-extra"
+    assert row["content_format"] == "feature_update"
+    assert row["event_key"] == "event-gemini-extra"
+    assert row["editorial_key"] == "gemini|gemini-extra|feature_update"
+    assert row["replaced_by_id"] == "gemini-best"
+    assert row["limit_key"] == "primary_entity:gemini"
+    assert row["limit_value"] == 1
+    assert diagnostics["selected_items"][0]["id"] == "gemini-best"
+    assert diagnostics["selected_items"][0]["score"] == 8.0
+
+
+def test_editorial_selection_does_not_lower_threshold_to_fill_topic_limit(tmp_path) -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-topic-radar": 8},
+        editorial_selection=EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+        ),
+    )
+    orchestrator = make_orchestrator(filtering)
+    orchestrator.config.processing.profile_settings["pangmen-topic-radar"] = (
+        ProfileSettingsConfig(threshold=7.0, topic_dedup=False)
+    )
+    qualified = make_item("qualified", 8.0, "ai", "pangmen-topic-radar")
+    weak = make_item("weak", 6.9, "ai", "pangmen-topic-radar")
+    for item in (qualified, weak):
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": item.id,
+                "topic_cluster": f"topic-{item.id}",
+                "use_case": f"case-{item.id}",
+                "content_format": "feature_update",
+                "novelty_level": "new_example",
+                "event_key": f"event-{item.id}",
+                "editorial_key": f"{item.id}|case-{item.id}|feature_update",
+                "relevance_score": 8,
+                "novelty_score": 8,
+                "demonstrability_score": 8,
+            }
+        )
+
+    result = asyncio.run(
+        orchestrator.filter_items(
+            [weak, qualified],
+            topic_dedup=False,
+            apply_balance=True,
+            log=False,
+        )
+    )
+
+    assert [item.id for item in result.items] == ["qualified"]
+    diagnostics = orchestrator.build_selection_diagnostics(
+        [weak, qualified],
+        result.items,
+        exclusion_stages=result.exclusion_stages,
+    )
+    assert diagnostics["items"][0]["reason"] == "below_profile_threshold"
+
+
+def test_mixed_editorial_selection_preserves_non_target_relative_order(tmp_path) -> None:
+    selector = EditorialSelector(
+        EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+            primary_entity_limit=1,
+        )
+    )
+    first_trend = make_item(
+        "first-trend", 8.0, "trend", "pangmen-platform-trend-radar"
+    )
+    second_trend = make_item(
+        "second-trend", 8.0, "trend", "pangmen-platform-trend-radar"
+    )
+    low = make_item("gemini-low", 8.0, "ai", "pangmen-topic-radar")
+    high = make_item("gemini-high", 8.0, "ai", "pangmen-topic-radar")
+    for item, relevance in ((low, 7), (high, 9)):
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": "gemini",
+                "topic_cluster": f"topic-{item.id}",
+                "use_case": f"case-{item.id}",
+                "content_format": "feature_update",
+                "novelty_level": "material_update",
+                "event_key": f"event-{item.id}",
+                "editorial_key": f"gemini|case-{item.id}|feature_update",
+                "relevance_score": relevance,
+                "novelty_score": relevance,
+                "demonstrability_score": relevance,
+            }
+        )
+
+    result = selector.select([first_trend, low, second_trend, high])
+
+    assert [item.id for item in result.items] == [
+        "first-trend",
+        "second-trend",
+        "gemini-high",
+    ]
+
+
+def test_august_19_replay_gives_every_rejected_item_an_explicit_reason(tmp_path) -> None:
+    rows = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "editorial_replay_2026-08-19.json"
+        ).read_text(encoding="utf-8")
+    )
+    filtering = DigestConfig(
+        profile_limits={"pangmen-topic-radar": 8},
+        editorial_selection=EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+        ),
+    )
+    orchestrator = make_orchestrator(filtering)
+    items = []
+    for row in rows:
+        item = make_item(row["id"], row["score"], "ai", "pangmen-topic-radar")
+        item.title = row["title"]
+        item.url = row["url"]
+        item.content = row["body_evidence"]
+        item.author = row["sub_source"]
+        item.metadata["feed_name"] = row["sub_source"]
+        item.processing.analysis = item.processing.analysis.model_copy(
+            update={
+                "primary_entity": row["primary_entity"],
+                "topic_cluster": row["topic_cluster"],
+                "use_case": row["use_case"],
+                "content_format": row["content_format"],
+                "novelty_level": row["novelty_level"],
+                "event_key": row["event_key"],
+                "editorial_key": "ignored-by-selector",
+                "relevance_score": row["relevance_score"],
+                "novelty_score": row["novelty_score"],
+                "demonstrability_score": row["demonstrability_score"],
+            }
+        )
+        items.append(item)
+
+    filtered = asyncio.run(
+        orchestrator.filter_items(
+            items,
+            threshold=7.0,
+            topic_dedup=False,
+            apply_balance=True,
+            log=False,
+        )
+    )
+    diagnostics = orchestrator.build_selection_diagnostics(
+        items,
+        filtered.items,
+        threshold=7.0,
+        exclusion_stages=filtered.exclusion_stages,
+    )
+
+    selected_analysis = [item.processing.analysis for item in filtered.items]
+    assert len(filtered.items) == 8
+    assert sum(a.primary_entity == "gemini" for a in selected_analysis) == 2
+    assert sum(a.topic_cluster == "ai_short_drama" for a in selected_analysis) == 2
+    assert sum(a.content_format == "tutorial_workflow" for a in selected_analysis) == 3
+    assert len({a.topic_cluster for a in selected_analysis}) >= 4
+    assert len(diagnostics["items"]) == 4
+    assert sorted(row["reason"] for row in diagnostics["items"]) == [
+        "digest_limit",
+        "diversity_entity_limit",
+        "diversity_topic_limit",
+        "diversity_topic_limit",
+    ]
+    assert all(row["replaced_by_id"] for row in diagnostics["items"][:3])
 
 
 def test_runtime_threshold_override_takes_priority() -> None:

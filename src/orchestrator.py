@@ -36,6 +36,12 @@ from .scrapers.huggingface import HuggingFaceScraper
 from .scrapers.platform_trends import PlatformTrendsScraper
 from .scrapers.platform_changes import PlatformChangesScraper
 from .processing.engagement import EngagementTracker
+from .processing.editorial_selection import (
+    EditorialSelector,
+    TARGET_PROFILES as EDITORIAL_PROFILES,
+    profile_id as editorial_profile_id,
+    sub_source_key as editorial_sub_source_key,
+)
 from .ai.client import create_ai_client
 from .ai.analyzer import ContentAnalyzer
 from .ai.summarizer import DailySummarizer
@@ -523,6 +529,7 @@ class HorizonOrchestrator:
                 ).items
                 if item.id in enriched_ids
             ]
+            self._editorial_selector().record_selected(important_items)
             if failed_ids:
                 self.console.print(
                     f"   Removed {len(failed_ids)} items that could not produce "
@@ -984,7 +991,13 @@ class HorizonOrchestrator:
             analysis = item.processing.analysis if item.processing else None
             tags = ", ".join(analysis.tags) if analysis and analysis.tags else "—"
             summary = analysis.summary if analysis else "—"
-            lines.append(f"[{i}] {item.title}\n    Tags: {tags}\n    Summary: {summary}")
+            event_key = analysis.event_key if analysis and analysis.event_key else "—"
+            lines.append(
+                f"[{i}] {item.title}\n"
+                f"    Event key: {event_key}\n"
+                f"    Tags: {tags}\n"
+                f"    Summary: {summary}"
+            )
         items_text = "\n\n".join(lines)
 
         try:
@@ -1043,6 +1056,11 @@ class HorizonOrchestrator:
                 self._update_candidate_trace(
                     dup, "dedup", "dropped", "semantic_topic_duplicate", merged_into_id=primary.id
                 )
+                if editorial_profile_id(dup) in EDITORIAL_PROFILES:
+                    dup.metadata["editorial_selection"] = {
+                        "reason": "exact_event_repeat",
+                        "replaced_by_id": primary.id,
+                    }
                 # Merge comments/content from the duplicate into the primary
                 if dup.content:
                     if not primary.content or dup.content not in primary.content:
@@ -1110,25 +1128,68 @@ class HorizonOrchestrator:
                 f"→ {len(deduped_items)} unique items\n"
             )
 
+        editorial_result = self._editorial_selector().select(deduped_items)
+        editorial_items = editorial_result.items
+        for item in deduped_items:
+            exclusion = editorial_result.exclusions.get(item.id)
+            if exclusion is None:
+                continue
+            item.metadata["editorial_selection"] = {
+                "reason": exclusion.reason,
+                "replaced_by_id": exclusion.replaced_by_id,
+                "limit_key": exclusion.limit_key,
+                "limit_value": exclusion.limit_value,
+            }
+        if log and editorial_result.exclusions:
+            self.console.print(
+                f"{self.icons['cleanup']} Removed "
+                f"{len(editorial_result.exclusions)} editorial repeats or quota conflicts "
+                f"→ {len(editorial_items)} candidates\n"
+            )
+
         balanced_digest = (
-            self.apply_balanced_digest(deduped_items, log=log)
+            self.apply_balanced_digest(editorial_items, log=log)
             if apply_balance
-            else BalancedDigestResult(items=deduped_items)
+            else BalancedDigestResult(items=editorial_items)
         )
-        exclusion_stages = {
-            item.id: "topic_dedup"
-            for item in threshold_items
-            if item.id not in {candidate.id for candidate in deduped_items}
-        }
+        deduped_ids = {candidate.id for candidate in deduped_items}
+        exclusion_stages = {}
+        for item in threshold_items:
+            if item.id in deduped_ids:
+                continue
+            decision = item.metadata.get("editorial_selection")
+            exclusion_stages[item.id] = (
+                str(decision.get("reason"))
+                if isinstance(decision, dict) and decision.get("reason")
+                else "topic_dedup"
+            )
+        exclusion_stages.update(
+            {
+                item_id: exclusion.reason
+                for item_id, exclusion in editorial_result.exclusions.items()
+            }
+        )
+        if apply_balance:
+            balanced_ids = {item.id for item in balanced_digest.items}
+            exclusion_stages.update(
+                {
+                    item.id: "digest_limit"
+                    for item in editorial_items
+                    if item.id not in balanced_ids
+                }
+            )
         return FilteringPipelineResult(
             items=balanced_digest.items,
             threshold_count=len(threshold_items),
             topic_dedup_count=len(deduped_items),
             topic_dedup_removed=topic_dedup_removed,
             balanced_digest=balanced_digest,
-            eligible_items=list(deduped_items),
+            eligible_items=list(editorial_items),
             exclusion_stages=exclusion_stages,
         )
+
+    def _editorial_selector(self) -> EditorialSelector:
+        return EditorialSelector(self.config.digest.editorial_selection)
 
     async def select_digest_items(
         self,
@@ -1189,19 +1250,21 @@ class HorizonOrchestrator:
         threshold: Optional[float] = None,
         exclusion_stages: Optional[Dict[str, str]] = None,
     ) -> dict:
-        """Return a compact, non-sensitive record for items excluded from a digest.
-
-        Items below their profile threshold receive an exact exclusion reason.
-        Items that pass the threshold but are absent from the final digest were
-        removed by semantic deduplication, a post-analysis filter, or a digest
-        limit, so the record deliberately keeps that stage broad instead of
-        inventing a more specific reason.
-        """
+        """Return non-sensitive selected and excluded digest diagnostics."""
         selected_ids = {item.id for item in selected_items}
         rejected = []
+        selected_rows = []
         for item in analyzed_items:
             if item.id in selected_ids:
                 self._update_candidate_trace(item, "final", "kept")
+                selected_rows.append(
+                    self._selection_diagnostic_row(
+                        item,
+                        stage="selected",
+                        reason="selected",
+                        threshold=threshold,
+                    )
+                )
                 continue
 
             analysis = item.processing.analysis if item.processing else None
@@ -1214,31 +1277,40 @@ class HorizonOrchestrator:
             effective_threshold = threshold
             if effective_threshold is None and settings is not None:
                 effective_threshold = settings.threshold
-            rejected.append(
-                {
-                    "id": item.id,
-                    "title": item.title,
-                    "profile": profile_id,
-                    "source_type": item.source_type.value,
-                    "category": item.metadata.get("category"),
-                    "score": analysis.score if analysis else None,
-                    "threshold": effective_threshold,
-                    "stage": (
-                        (exclusion_stages or {}).get(item.id)
-                        or (
-                            "below_profile_threshold"
-                            if not self.passes_profile_filter(item, threshold)
-                            else "removed_after_threshold"
-                        )
-                    ),
-                    "analysis_reason": analysis.reason if analysis else None,
-                    **(
-                        {"candidate_trace": item.metadata["candidate_trace"]}
-                        if isinstance(item.metadata.get("candidate_trace"), dict)
-                        else {}
-                    ),
-                }
+            stage = (
+                (exclusion_stages or {}).get(item.id)
+                or (
+                    "below_profile_threshold"
+                    if not self.passes_profile_filter(item, threshold)
+                    else "removed_after_threshold"
+                )
             )
+            row = {
+                "id": item.id,
+                "title": item.title,
+                "profile": profile_id,
+                "source_type": item.source_type.value,
+                "category": item.metadata.get("category"),
+                "score": analysis.score if analysis else None,
+                "threshold": effective_threshold,
+                "stage": stage,
+                "analysis_reason": analysis.reason if analysis else None,
+                **(
+                    {"candidate_trace": item.metadata["candidate_trace"]}
+                    if isinstance(item.metadata.get("candidate_trace"), dict)
+                    else {}
+                ),
+            }
+            if profile_id in EDITORIAL_PROFILES:
+                row["url"] = str(item.url)
+                row["sub_source"] = self._sub_source_label(item)
+                row.update(
+                    self._editorial_diagnostic_fields(
+                        item,
+                        reason=stage,
+                    )
+                )
+            rejected.append(row)
             self._update_candidate_trace(
                 item,
                 "final",
@@ -1257,6 +1329,65 @@ class HorizonOrchestrator:
             "selected_count": len(selected_items),
             "rejected_count": len(rejected),
             "items": rejected,
+            "selected_items": selected_rows,
+        }
+
+    def _selection_diagnostic_row(
+        self,
+        item: ContentItem,
+        *,
+        stage: str,
+        reason: str,
+        threshold: Optional[float],
+    ) -> dict:
+        analysis = item.processing.analysis if item.processing else None
+        item_profile = editorial_profile_id(item) or self.profiles.default_profile
+        settings = self.config.processing.profile_settings.get(item_profile)
+        effective_threshold = threshold
+        if effective_threshold is None and settings is not None:
+            effective_threshold = settings.threshold
+        row = {
+            "id": item.id,
+            "title": item.title,
+            "url": str(item.url),
+            "profile": item_profile,
+            "source_type": item.source_type.value,
+            "sub_source": self._sub_source_label(item),
+            "category": item.metadata.get("category"),
+            "score": analysis.score if analysis else None,
+            "threshold": effective_threshold,
+            "stage": stage,
+            "reason": reason,
+            "analysis_reason": analysis.reason if analysis else None,
+        }
+        if item_profile in EDITORIAL_PROFILES:
+            row.update(self._editorial_diagnostic_fields(item, reason=reason))
+        return row
+
+    @staticmethod
+    def _editorial_diagnostic_fields(item: ContentItem, *, reason: str) -> dict:
+        analysis = item.processing.analysis if item.processing else None
+        decision = item.metadata.get("editorial_selection")
+        if not isinstance(decision, dict):
+            decision = {}
+        return {
+            "sub_source_key": editorial_sub_source_key(item),
+            "reason": reason,
+            "primary_entity": analysis.primary_entity if analysis else None,
+            "topic_cluster": analysis.topic_cluster if analysis else None,
+            "use_case": analysis.use_case if analysis else None,
+            "content_format": analysis.content_format if analysis else None,
+            "novelty_level": analysis.novelty_level if analysis else None,
+            "event_key": analysis.event_key if analysis else None,
+            "editorial_key": analysis.editorial_key if analysis else None,
+            "relevance_score": analysis.relevance_score if analysis else None,
+            "novelty_score": analysis.novelty_score if analysis else None,
+            "demonstrability_score": (
+                analysis.demonstrability_score if analysis else None
+            ),
+            "replaced_by_id": decision.get("replaced_by_id"),
+            "limit_key": decision.get("limit_key"),
+            "limit_value": decision.get("limit_value"),
         }
 
     @staticmethod
@@ -1409,7 +1540,10 @@ class HorizonOrchestrator:
         return tuple(platforms)
 
     @classmethod
-    def _selection_sort_key(cls, item: ContentItem) -> tuple[float, float, float]:
+    def _selection_sort_key(
+        cls,
+        item: ContentItem,
+    ) -> tuple[float, float, float, float, float, str]:
         analysis = item.processing.analysis if item.processing else None
         profile_id = (
             item.processing.classification.profile if item.processing else item.profile
@@ -1423,10 +1557,37 @@ class HorizonOrchestrator:
             if analysis and analysis.score is not None
             else -1.0
         )
+        if profile_id in EDITORIAL_PROFILES and analysis:
+            published_at = item.published_at
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            return (
+                float(score),
+                float(
+                    analysis.relevance_score
+                    if analysis.relevance_score is not None
+                    else -1.0
+                ),
+                float(
+                    analysis.novelty_score
+                    if analysis.novelty_score is not None
+                    else -1.0
+                ),
+                float(
+                    analysis.demonstrability_score
+                    if analysis.demonstrability_score is not None
+                    else -1.0
+                ),
+                published_at.timestamp(),
+                item.id,
+            )
         return (
             float(score),
             cls._platform_source_priority(item),
             cls._platform_trend_heat_boost(item),
+            0.0,
+            0.0,
+            "",
         )
 
     def apply_balanced_digest(
@@ -1452,7 +1613,9 @@ class HorizonOrchestrator:
         for item in items:
             self._assign_platform_trend_pool(item)
 
-        def digest_sort_key(item: ContentItem) -> tuple[float, float, float, float]:
+        def digest_sort_key(
+            item: ContentItem,
+        ) -> tuple[float, float, float, float, float, float, str]:
             profile_id = (
                 item.processing.classification.profile
                 if item.processing

@@ -15,6 +15,7 @@ ANALYSIS_RULES = f"""You are a content curator evaluating an item under the supp
 
 
 def analysis_system_prompt(profile: LoadedProfile) -> str:
+    editorial_guidance = ""
     if profile.id == "pangmen-platform-trend-radar":
         output_contract = """{
   "score": <same value as operations_score, from 0 to 10>,
@@ -39,6 +40,33 @@ def analysis_system_prompt(profile: LoadedProfile) -> str:
   "summary": "<one or two sentence factual change brief>",
   "tags": ["<tag>", "..."]
 }"""
+    elif profile.id in {"pangmen-topic-radar", "pangmen-ai-tech-radar"}:
+        editorial_guidance = """
+For the editorial fields, use body evidence from the supplied content and metadata,
+not the title alone. Do not treat different releases, features, examples, or tutorials
+as the same event merely because they mention the same tool. Use concise canonical
+snake_case identifiers. event_key must identify the exact factual release, update,
+announcement, test, tutorial, or case so that the same event can match across sources.
+For a roundup, use the primary factual update as event_key rather than treating the
+roundup URL itself as a new event. editorial_key must be composed from primary_entity,
+use_case, and content_format; the application will normalize and verify it.
+"""
+        output_contract = """{
+  "score": <number from 0 to 10>,
+  "reason": "<concise evidence-based explanation>",
+  "summary": "<one-sentence factual summary>",
+  "tags": ["<tag>", "..."],
+  "primary_entity": "<canonical product, tool, or brand identifier>",
+  "topic_cluster": "<canonical topic identifier>",
+  "use_case": "<canonical user task or scenario identifier>",
+  "content_format": "product_release|feature_update|hands_on_test|tutorial_workflow|case_study|opinion_news",
+  "novelty_level": "major_release|material_update|new_example|evergreen_repackage",
+  "event_key": "<stable identifier for this exact real-world event>",
+  "editorial_key": "<primary_entity|use_case|content_format>",
+  "relevance_score": <number from 0 to 10>,
+  "novelty_score": <number from 0 to 10>,
+  "demonstrability_score": <number from 0 to 10>
+}"""
     else:
         output_contract = """{
   "score": <number from 0 to 10>,
@@ -53,6 +81,8 @@ def analysis_system_prompt(profile: LoadedProfile) -> str:
 {profile.analysis_prompt}
 
 # Output contract
+
+{editorial_guidance}
 
 Return valid JSON only:
 {output_contract}"""

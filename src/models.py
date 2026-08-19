@@ -98,6 +98,38 @@ class ContentAnalysis(BaseModel):
     affected_audience: List[str] = Field(default_factory=list)
     impact_level: Optional[Literal["high", "medium", "low", "unknown"]] = None
     change_status: Optional[str] = None
+    primary_entity: Optional[str] = None
+    topic_cluster: Optional[str] = None
+    use_case: Optional[str] = None
+    content_format: Optional[
+        Literal[
+            "product_release",
+            "feature_update",
+            "hands_on_test",
+            "tutorial_workflow",
+            "case_study",
+            "opinion_news",
+        ]
+    ] = None
+    novelty_level: Optional[
+        Literal[
+            "major_release",
+            "material_update",
+            "new_example",
+            "evergreen_repackage",
+        ]
+    ] = None
+    event_key: Optional[str] = None
+    editorial_key: Optional[str] = None
+    relevance_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    novelty_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    demonstrability_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
@@ -815,6 +847,30 @@ class CollectionConfig(BaseModel):
     )
 
 
+class EditorialSelectionConfig(BaseModel):
+    """Same-day diversity and cross-day freshness for AI editorial profiles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    state_file: str = "data/digest_selection_state.json"
+    history_days: int = Field(default=7, ge=1)
+    editorial_cooldown_days: int = Field(default=3, ge=1)
+    primary_entity_limit: int = Field(default=2, ge=1)
+    topic_cluster_limit: int = Field(default=2, ge=1)
+    use_case_limit: int = Field(default=2, ge=1)
+    tutorial_workflow_limit: int = Field(default=3, ge=1)
+    sub_source_limit: int = Field(default=2, ge=1)
+    max_history_entries: int = Field(default=500, ge=1)
+
+    @field_validator("state_file")
+    @classmethod
+    def validate_state_file(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("digest.editorial_selection.state_file cannot be empty")
+        return value
+
+
 class DigestConfig(BaseModel):
     """Controls grouping and limits in the final digest."""
 
@@ -828,6 +884,9 @@ class DigestConfig(BaseModel):
     platform_trend_leverage_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_minimum_per_platform: Optional[int] = Field(default=None, gt=0)
+    editorial_selection: EditorialSelectionConfig = Field(
+        default_factory=EditorialSelectionConfig
+    )
     profile_order: List[str] = Field(default_factory=list)
 
     @field_validator("profile_limits")

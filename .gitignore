@@ -41,6 +41,7 @@ data/config.json
 data/seen.json
 data/engagement_snapshots.json
 data/platform_change_state.json
+data/digest_selection_state.json
 data/summaries/*.md
 data/subscribers.json
 data/mcp.secrets.json

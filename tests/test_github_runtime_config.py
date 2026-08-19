@@ -54,8 +54,10 @@ def test_scheduled_workflow_gates_all_expensive_or_external_steps_after_checkout
         "Install dependencies",
         "Prepare GitHub Actions config",
         "Restore platform change state",
+        "Restore digest selection state",
         "Run Horizon",
         "Save platform change state",
+        "Save digest selection state",
         "Upload selection diagnostics",
         "Set current date as environment variable",
         "Deploy to GitHub Pages",
@@ -108,7 +110,7 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert settings["pangmen-ai-tech-radar"]["threshold"] == 7.0
     assert settings["pangmen-platform-trend-radar"]["threshold"] == 7.0
     assert config["digest"]["profile_limits"] == {
-        "pangmen-topic-radar": 12,
+        "pangmen-topic-radar": 8,
         "pangmen-ai-tech-radar": 5,
         "pangmen-platform-trend-radar": 8,
         "pangmen-platform-change-radar": 5,
@@ -117,6 +119,19 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert config["digest"]["platform_trend_leverage_limit"] == 6
     assert config["digest"]["platform_trend_watch_limit"] == 4
     assert config["digest"]["platform_trend_minimum_per_platform"] == 1
+    editorial = config["digest"]["editorial_selection"]
+    assert editorial == {
+        "enabled": True,
+        "state_file": "data/digest_selection_state.json",
+        "history_days": 7,
+        "editorial_cooldown_days": 3,
+        "primary_entity_limit": 2,
+        "topic_cluster_limit": 2,
+        "use_case_limit": 2,
+        "tutorial_workflow_limit": 3,
+        "sub_source_limit": 2,
+        "max_history_entries": 500,
+    }
     assert config["sources"]["huggingface"]["enabled"] is True
 
     platform_providers = config["sources"]["platform_trends"]["providers"]
@@ -168,6 +183,34 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert provider_limits[("toutiao", "alapi_tophub")] == (20, 20)
     assert provider_limits[("zhihu", "alapi_tophub")] == (20, 20)
     assert "platform-trend" not in config["digest"]["category_groups"]
+
+
+def test_digest_selection_state_uses_an_independent_restore_and_save_cache():
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
+        encoding="utf-8"
+    )
+
+    restore = workflow.split("- name: Restore digest selection state", 1)[1].split(
+        "- name:", 1
+    )[0]
+    save = workflow.split("- name: Save digest selection state", 1)[1].split(
+        "- name:", 1
+    )[0]
+
+    assert "actions/cache/restore@v4" in restore
+    assert "id: restore_digest_selection_state" in restore
+    assert "path: data/digest_selection_state.json" in restore
+    assert "key: digest-selection-state-${{ github.run_id }}" in restore
+    assert "restore-keys: |" in restore
+    assert "digest-selection-state-" in restore
+    assert "platform-change-state-" not in restore
+    assert "fail-on-cache-miss" not in restore
+    assert "actions/cache/save@v4" in save
+    assert "path: data/digest_selection_state.json" in save
+    assert "key: digest-selection-state-${{ github.run_id }}" in save
+    assert "if: success()" in save
+    assert workflow.index("Restore digest selection state") < workflow.index("Run Horizon")
+    assert workflow.index("Run Horizon") < workflow.index("Save digest selection state")
 
 
 def test_platform_change_radar_uses_public_watchers_and_persistent_action_state():

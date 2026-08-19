@@ -771,10 +771,22 @@
   "digest": {
     "max_items": 25,
     "profile_limits": {
-      "pangmen-topic-radar": 12,
+      "pangmen-topic-radar": 8,
       "pangmen-ai-tech-radar": 5,
       "pangmen-platform-trend-radar": 8,
       "pangmen-platform-change-radar": 5
+    },
+    "editorial_selection": {
+      "enabled": true,
+      "state_file": "data/digest_selection_state.json",
+      "history_days": 7,
+      "editorial_cooldown_days": 3,
+      "primary_entity_limit": 2,
+      "topic_cluster_limit": 2,
+      "use_case_limit": 2,
+      "tutorial_workflow_limit": 3,
+      "sub_source_limit": 2,
+      "max_history_entries": 500
     },
     "platform_trend_leverage_limit": 6,
     "platform_trend_watch_limit": 4,

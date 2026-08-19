@@ -78,6 +78,20 @@ jobs:
         if: steps.restore_platform_change_state.outcome == 'success'
         run: echo "cache-matched-key=${{ steps.restore_platform_change_state.outputs.cache-matched-key }}"
 
+      - name: Restore digest selection state
+        id: restore_digest_selection_state
+        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        uses: actions/cache/restore@v4
+        with:
+          path: data/digest_selection_state.json
+          key: digest-selection-state-${{ github.run_id }}
+          restore-keys: |
+            digest-selection-state-
+
+      - name: Report restored digest selection cache key
+        if: steps.restore_digest_selection_state.outcome == 'success'
+        run: echo "cache-matched-key=${{ steps.restore_digest_selection_state.outputs.cache-matched-key }}"
+
       - name: Restore production platform change state for smoke
         id: restore_platform_change_state_smoke
         if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'platform_changes_smoke'
@@ -115,6 +129,13 @@ jobs:
         with:
           path: data/platform_change_state.json
           key: platform-change-state-${{ github.run_id }}
+
+      - name: Save digest selection state
+        if: success() && (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full') && hashFiles('data/digest_selection_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/digest_selection_state.json
+          key: digest-selection-state-${{ github.run_id }}
 
       - name: Run platform changes smoke
         if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'platform_changes_smoke'
