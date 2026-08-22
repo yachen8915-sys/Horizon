@@ -37,6 +37,13 @@
 
 内容机会不足不能直接淘汰高 operations_score 热点。content_opportunity_score ≥ 7 时可进入“今日可借势热点”；operations_score 达标但 content_opportunity_score < 7 时进入“今日大盘热点观察”。观察池不生成主推角度或备选角度。
 
+普通娱乐、体育、明星和短期猎奇不是自动排除条件。程序会先根据榜单排名、热度百分位、跨平台出现和每日状态计算 `heat_score`，再执行两档准入：
+
+- 标准：`heat_score >= 7`、`operations_score >= 7`、`content_opportunity_score >= 6`、`evidence_quality_score >= 4`；
+- 高热度放宽：`heat_score >= 9`、`operations_score >= 5`、`content_opportunity_score >= 4`、`evidence_quality_score >= 4`。
+
+高热度放宽只降低延展相关性门槛，不取消事实证据和品牌安全门槛。旁门延展分由 `content_opportunity_score`（50%）、`operations_score`（30%）和 `evidence_quality_score`（20%）计算，最多输出 3 个具体 `extension_angles`。
+
 ## 直接排除边界
 
 只有极低热度、过时、无可信来源、政治敏感、灾难事故、逝者、严重社会事件、高品牌安全风险或纯低价值粉圈八卦才直接排除。普通娱乐文化热点不能因内容机会弱而被删除。

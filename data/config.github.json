@@ -469,6 +469,15 @@
     },
     "platform_trends": {
       "enabled": true,
+      "state_file": "data/platform_trend_state.json",
+      "history_days": 7,
+      "heat_standard_threshold": 7.0,
+      "heat_high_threshold": 9.0,
+      "operations_standard_threshold": 7.0,
+      "opportunity_standard_threshold": 6.0,
+      "evidence_minimum": 4.0,
+      "high_heat_operations_threshold": 5.0,
+      "high_heat_opportunity_threshold": 4.0,
       "providers": [
         {
           "enabled": true,
@@ -577,7 +586,7 @@
           "reliability": "commercial_aggregator"
         },
         {
-          "enabled": true,
+          "enabled": false,
           "platform": "baidu",
           "provider": "alapi_tophub",
           "provider_name": "ALAPI",
@@ -594,7 +603,7 @@
           "rank_limit": 12,
           "category": "platform-trend",
           "profile": "pangmen-platform-trend-radar",
-          "reliability": "commercial_aggregator"
+          "reliability": "stale_snapshot"
         },
         {
           "enabled": true,
@@ -605,13 +614,33 @@
           "endpoint": "/api/tophub",
           "request_method": "POST",
           "response_adapter": "alapi_tophub",
-          "source_id": "gldzMo",
+          "source_id": "daGJMz",
           "api_key_env": "ALAPI_TOKEN",
           "api_key_header": "token",
           "api_key_prefix": "",
           "observed_timezone": "Asia/Shanghai",
-          "fetch_limit": 8,
-          "rank_limit": 12,
+          "fetch_limit": 15,
+          "rank_limit": 15,
+          "category": "platform-trend",
+          "profile": "pangmen-platform-trend-radar",
+          "reliability": "commercial_aggregator"
+        },
+        {
+          "enabled": true,
+          "platform": "bilibili",
+          "provider": "alapi_tophub",
+          "provider_name": "ALAPI",
+          "base_url": "https://v3.alapi.cn",
+          "endpoint": "/api/tophub",
+          "request_method": "POST",
+          "response_adapter": "alapi_tophub",
+          "source_id": "vMAzae",
+          "api_key_env": "ALAPI_TOKEN",
+          "api_key_header": "token",
+          "api_key_prefix": "",
+          "observed_timezone": "Asia/Shanghai",
+          "fetch_limit": 20,
+          "rank_limit": 20,
           "category": "platform-trend",
           "profile": "pangmen-platform-trend-radar",
           "reliability": "commercial_aggregator"
@@ -803,6 +832,7 @@
     "platform_trend_leverage_limit": 6,
     "platform_trend_watch_limit": 4,
     "platform_trend_minimum_per_platform": 1,
+    "platform_trend_max_per_platform": 2,
     "profile_order": [
       "pangmen-topic-radar",
       "pangmen-ai-tech-radar",

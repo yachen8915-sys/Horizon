@@ -36,6 +36,10 @@ from .scrapers.huggingface import HuggingFaceScraper
 from .scrapers.platform_trends import PlatformTrendsScraper
 from .scrapers.platform_changes import PlatformChangesScraper
 from .processing.engagement import EngagementTracker
+from .processing.platform_trend_selection import (
+    PlatformTrendStateStore,
+    annotate_extension_score,
+)
 from .processing.editorial_selection import (
     EditorialSelector,
     TARGET_PROFILES as EDITORIAL_PROFILES,
@@ -384,6 +388,10 @@ class HorizonOrchestrator:
             else None
         )
         self.last_fetch_report: Optional[FetchReport] = None
+        self.last_platform_trend_health: list[dict[str, object]] = []
+        self.platform_trend_state_store: PlatformTrendStateStore | None = None
+        self.last_platform_trend_selection: dict[str, object] = {}
+        self.last_platform_trend_overflow: list[ContentItem] = []
 
     @staticmethod
     def _update_candidate_trace(
@@ -462,6 +470,8 @@ class HorizonOrchestrator:
                     f"→ {len(merged_items)} unique items\n"
                 )
 
+            self._prepare_platform_trend_selection(merged_items)
+
             # 4. Analyze with AI
             analysis_checkpoint = self._cache_path("analysis")
             if "checkpoint_path" in inspect.signature(self.analyze_items).parameters:
@@ -528,6 +538,15 @@ class HorizonOrchestrator:
                     log=False,
                 ).items
                 if item.id in enriched_ids
+            ]
+            selected_ids = {item.id for item in important_items}
+            self.last_platform_trend_overflow = [
+                item
+                for item in filtering_result.eligible_items
+                if item.id not in selected_ids
+                and item.id not in failed_ids
+                and item.processing
+                and item.processing.classification.profile == _PLATFORM_TREND_PROFILE_ID
             ]
             self._editorial_selector().record_selected(important_items)
             if failed_ids:
@@ -616,12 +635,15 @@ class HorizonOrchestrator:
                     await self.webhook_notifier.send_daily_summary(
                         summary=summary,
                         important_items=important_items,
+                        platform_trend_overflow=self.last_platform_trend_overflow,
                         all_items_count=len(all_items),
                         date=today,
                         lang=lang,
                         summarizer=summarizer,
                     )
 
+            if self.platform_trend_state_store is not None:
+                self.platform_trend_state_store.commit(important_items)
             self.console.print(
                 f"[bold green]{self.icons['success']} "
                 "Horizon completed successfully![/bold green]"
@@ -647,6 +669,33 @@ class HorizonOrchestrator:
             )
 
             raise
+
+    def _prepare_platform_trend_selection(self, items: List[ContentItem]) -> None:
+        """Annotate trend heat/state once per daily run without extra I/O calls."""
+        config = getattr(self.config.sources, "platform_trends", None)
+        if not config or not config.enabled:
+            self.platform_trend_state_store = None
+            self.last_platform_trend_selection = {}
+            return
+        trend_items = [
+            item
+            for item in items
+            if item.source_type == SourceType.PLATFORM_TRENDS
+            or (
+                item.processing
+                and item.processing.classification.profile == _PLATFORM_TREND_PROFILE_ID
+            )
+        ]
+        self.platform_trend_state_store = PlatformTrendStateStore(config)
+        self.platform_trend_state_store.prepare(trend_items)
+        for item in trend_items:
+            annotate_extension_score(item)
+        self.last_platform_trend_selection = {
+            "raw_count": len(trend_items),
+            "heat_scored_count": sum("heat_score" in item.metadata for item in trend_items),
+            "state_file": config.state_file,
+            "state_version": 1,
+        }
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:
         if force_hours:
@@ -790,6 +839,12 @@ class HorizonOrchestrator:
             # Fetch all concurrently
             outcomes = await asyncio.gather(*tasks)
             self.last_fetch_report = FetchReport(outcomes=list(outcomes))
+            self.last_platform_trend_health = [
+                health
+                for outcome in outcomes
+                if outcome.source_name == "Platform Trends"
+                for health in outcome.watcher_health
+            ]
 
             # Flatten successful and empty outcomes; failures remain in the report.
             all_items: List[ContentItem] = []
@@ -856,7 +911,10 @@ class HorizonOrchestrator:
             source_name=name,
             status="success" if items else "empty",
             items=items,
-            watcher_health=list(getattr(scraper, "last_watcher_results", []) or []),
+            watcher_health=[
+                *list(getattr(scraper, "last_watcher_results", []) or []),
+                *list(getattr(scraper, "last_provider_health", []) or []),
+            ],
         )
 
     @staticmethod
@@ -1091,7 +1149,15 @@ class HorizonOrchestrator:
                 threshold_items.append(item)
                 self._update_candidate_trace(item, "threshold", "kept")
             else:
-                self._update_candidate_trace(item, "threshold", "dropped", "below_profile_threshold")
+                self._update_candidate_trace(
+                    item,
+                    "threshold",
+                    "dropped",
+                    str(
+                        item.metadata.get("trend_eligibility_reason")
+                        or "below_profile_threshold"
+                    ),
+                )
         threshold_items.sort(key=self._selection_sort_key, reverse=True)
 
         if log:
@@ -1227,7 +1293,9 @@ class HorizonOrchestrator:
                 None if item.id in selected_ids else "digest_limit",
             )
         exclusion_stages = {
-            item.id: "digest_limit"
+            item.id: getattr(self, "last_balance_exclusions", {}).get(
+                item.id, "digest_limit"
+            )
             for item in eligible
             if item.id not in selected_ids
         }
@@ -1280,7 +1348,7 @@ class HorizonOrchestrator:
             stage = (
                 (exclusion_stages or {}).get(item.id)
                 or (
-                    "below_profile_threshold"
+                    str(item.metadata.get("trend_eligibility_reason") or "below_profile_threshold")
                     if not self.passes_profile_filter(item, threshold)
                     else "removed_after_threshold"
                 )
@@ -1317,11 +1385,35 @@ class HorizonOrchestrator:
                 "dropped",
                 (exclusion_stages or {}).get(item.id)
                 or (
-                    "below_profile_threshold"
+                    str(item.metadata.get("trend_eligibility_reason") or "below_profile_threshold")
                     if not self.passes_profile_filter(item, threshold)
                     else "removed_after_threshold"
                 ),
             )
+        platform_health = getattr(self, "last_platform_trend_health", [])
+        platform_provider_counts: dict[str, int] = defaultdict(int)
+        platform_counts: dict[str, int] = defaultdict(int)
+        platform_failure_reasons: dict[str, int] = defaultdict(int)
+        for health in platform_health:
+            provider = str(health.get("provider") or "unknown")
+            platform_provider_counts[provider] += int(health.get("item_count") or 0)
+            platform = str(health.get("platform") or "unknown")
+            platform_counts[platform] += int(health.get("item_count") or 0)
+            status = str(health.get("status") or "unknown")
+            if status != "ok":
+                platform_failure_reasons[status] += 1
+        platform_trend_rows = [
+            item for item in analyzed_items if item.source_type == SourceType.PLATFORM_TRENDS
+        ]
+        trend_reasons: dict[str, int] = defaultdict(int)
+        trend_types: dict[str, int] = defaultdict(int)
+        for item in platform_trend_rows:
+            reason = item.metadata.get("trend_eligibility_reason")
+            if reason:
+                trend_reasons[str(reason)] += 1
+            trend_type = item.metadata.get("trend_type")
+            if trend_type:
+                trend_types[str(trend_type)] += 1
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1330,6 +1422,18 @@ class HorizonOrchestrator:
             "rejected_count": len(rejected),
             "items": rejected,
             "selected_items": selected_rows,
+            "platform_trend_health": platform_health,
+            "platform_trend_provider_counts": dict(platform_provider_counts),
+            "platform_trend_platform_counts": dict(platform_counts),
+            "platform_trend_failure_reasons": dict(platform_failure_reasons),
+            "platform_trend_selection": {
+                **getattr(self, "last_platform_trend_selection", {}),
+                "candidate_count": len(platform_trend_rows),
+                "eligibility_reasons": dict(trend_reasons),
+                "trend_types": dict(trend_types),
+                "selected_count": sum(item.id in selected_ids for item in platform_trend_rows),
+                "overflow_count": len(getattr(self, "last_platform_trend_overflow", [])),
+            },
         }
 
     def _selection_diagnostic_row(
@@ -1385,6 +1489,20 @@ class HorizonOrchestrator:
             "demonstrability_score": (
                 analysis.demonstrability_score if analysis else None
             ),
+            "evidence_quality_score": analysis.evidence_quality_score if analysis else None,
+            "extension_score": (
+                analysis.extension_score
+                if analysis and analysis.extension_score is not None
+                else item.metadata.get("extension_score")
+            ),
+            "extension_angles": analysis.extension_angles if analysis else [],
+            "extension_reason": analysis.extension_reason if analysis else None,
+            "heat_score": item.metadata.get("heat_score"),
+            "heat_percentile": item.metadata.get("heat_percentile"),
+            "trend_type": item.metadata.get("trend_type"),
+            "trend_final_score": item.metadata.get("trend_final_score"),
+            "trend_eligibility_mode": item.metadata.get("trend_eligibility_mode"),
+            "trend_eligibility_reason": item.metadata.get("trend_eligibility_reason"),
             "replaced_by_id": decision.get("replaced_by_id"),
             "limit_key": decision.get("limit_key"),
             "limit_value": decision.get("limit_value"),
@@ -1421,10 +1539,17 @@ class HorizonOrchestrator:
         analysis = item.processing.analysis
         if (
             profile_id == _PLATFORM_TREND_PROFILE_ID
-            and self._is_platform_trend_brand_safety_excluded(item)
         ):
-            item.metadata["trend_excluded_reason"] = "brand_safety"
-            return False
+            allowed, reason = self._platform_trend_gate(item, threshold=effective_threshold)
+            item.metadata["trend_eligibility_reason"] = reason
+            item.metadata["trend_eligibility_mode"] = (
+                "standard_pass"
+                if reason == "standard_pass"
+                else "high_heat_relaxed_pass"
+                if reason == "high_heat_relaxed_pass"
+                else "rejected"
+            )
+            return allowed
         if effective_threshold is None:
             return True
         score = (
@@ -1434,6 +1559,79 @@ class HorizonOrchestrator:
             else analysis.score
         )
         return score is not None and score >= effective_threshold
+
+    def _platform_trend_gate(
+        self,
+        item: ContentItem,
+        *,
+        threshold: Optional[float] = None,
+    ) -> tuple[bool, str]:
+        """Apply heat + extension gates while preserving topic flexibility."""
+        if self._is_platform_trend_brand_safety_excluded(item):
+            item.metadata["trend_excluded_reason"] = "brand_safety"
+            return False, "brand_safety"
+        analysis = item.processing.analysis if item.processing else None
+        config = getattr(getattr(self.config, "sources", None), "platform_trends", None)
+        if analysis is None:
+            return False, "missing_analysis"
+        if config is None:
+            heat_standard_threshold = 7.0
+            heat_high_threshold = 9.0
+            operations_standard_threshold = 7.0
+            opportunity_standard_threshold = 6.0
+            evidence_minimum = 4.0
+            high_heat_operations_threshold = 5.0
+            high_heat_opportunity_threshold = 4.0
+        else:
+            heat_standard_threshold = config.heat_standard_threshold
+            heat_high_threshold = config.heat_high_threshold
+            operations_standard_threshold = config.operations_standard_threshold
+            opportunity_standard_threshold = config.opportunity_standard_threshold
+            evidence_minimum = config.evidence_minimum
+            high_heat_operations_threshold = config.high_heat_operations_threshold
+            high_heat_opportunity_threshold = config.high_heat_opportunity_threshold
+        heat = item.metadata.get("heat_score")
+        heat = float(heat) if isinstance(heat, (int, float)) else 0.0
+        operations = analysis.operations_score
+        if operations is None:
+            operations = analysis.score
+        opportunity = analysis.content_opportunity_score
+        if opportunity is None:
+            opportunity = analysis.score
+        evidence = analysis.evidence_quality_score
+        evidence = float(evidence) if evidence is not None else 0.0
+        operations = float(operations) if operations is not None else -1.0
+        opportunity = float(opportunity) if opportunity is not None else -1.0
+        extension_score = analysis.extension_score
+        if extension_score is None:
+            annotate_extension_score(item)
+            extension_score = item.metadata.get("extension_score")
+        item.metadata["extension_score"] = extension_score
+        item.metadata["trend_final_score"] = round(
+            heat * 0.45
+            + float(extension_score or 0.0) * 0.35
+            + evidence * 0.20,
+            2,
+        )
+        if heat < heat_standard_threshold:
+            return False, "below_heat_threshold"
+        if evidence < evidence_minimum:
+            return False, "evidence_insufficient"
+        if (
+            heat >= heat_standard_threshold
+            and operations >= operations_standard_threshold
+            and opportunity >= opportunity_standard_threshold
+        ):
+            return True, "standard_pass"
+        if (
+            heat >= heat_high_threshold
+            and operations >= high_heat_operations_threshold
+            and opportunity >= high_heat_opportunity_threshold
+        ):
+            return True, "high_heat_relaxed_pass"
+        if operations < operations_standard_threshold:
+            return False, "operations_insufficient"
+        return False, "extension_insufficient"
 
     @staticmethod
     def _is_platform_trend_brand_safety_excluded(item: ContentItem) -> bool:
@@ -1543,7 +1741,7 @@ class HorizonOrchestrator:
     def _selection_sort_key(
         cls,
         item: ContentItem,
-    ) -> tuple[float, float, float, float, float, str]:
+    ) -> tuple:
         analysis = item.processing.analysis if item.processing else None
         profile_id = (
             item.processing.classification.profile if item.processing else item.profile
@@ -1557,6 +1755,27 @@ class HorizonOrchestrator:
             if analysis and analysis.score is not None
             else -1.0
         )
+        if profile_id == _PLATFORM_TREND_PROFILE_ID:
+            final_score = item.metadata.get("trend_final_score")
+            heat_score = item.metadata.get("heat_score")
+            extension_score = (
+                analysis.extension_score
+                if analysis and analysis.extension_score is not None
+                else item.metadata.get("extension_score")
+            )
+            evidence_score = (
+                analysis.evidence_quality_score
+                if analysis and analysis.evidence_quality_score is not None
+                else -1.0
+            )
+            return (
+                float(final_score if isinstance(final_score, (int, float)) else score),
+                float(extension_score if isinstance(extension_score, (int, float)) else -1.0),
+                float(evidence_score),
+                float(heat_score if isinstance(heat_score, (int, float)) else -1.0),
+                cls._platform_source_priority(item),
+                cls._platform_trend_heat_boost(item),
+            )
         if profile_id in EDITORIAL_PROFILES and analysis:
             published_at = item.published_at
             if published_at.tzinfo is None:
@@ -1607,8 +1826,17 @@ class HorizonOrchestrator:
         max_items = digest.max_items
         profile_limits = digest.profile_limits
         unbounded_profiles = set(digest.unbounded_profiles)
+        self.last_balance_exclusions = {}
 
-        if not groups and max_items is None and not profile_limits:
+        if (
+            not groups
+            and max_items is None
+            and not profile_limits
+            and digest.platform_trend_leverage_limit is None
+            and digest.platform_trend_watch_limit is None
+            and digest.platform_trend_minimum_per_platform is None
+            and digest.platform_trend_max_per_platform is None
+        ):
             return BalancedDigestResult(items=items)
 
         for item in items:
@@ -1653,7 +1881,12 @@ class HorizonOrchestrator:
         group_counts: Dict[str, int] = defaultdict(int)
         profile_counts: Dict[str, int] = defaultdict(int)
         trend_pool_counts: Dict[str, int] = defaultdict(int)
+        trend_platform_counts: Dict[str, int] = defaultdict(int)
         default_group = digest.default_group
+
+        def reject(item: ContentItem, reason: str) -> bool:
+            self.last_balance_exclusions[item.id] = reason
+            return False
 
         def try_select(item: ContentItem) -> bool:
             profile_id = (
@@ -1663,7 +1896,7 @@ class HorizonOrchestrator:
             )
             is_unbounded_profile = profile_id in unbounded_profiles
             if max_items is not None and len(selected) >= max_items and not is_unbounded_profile:
-                return False
+                return reject(item, "digest_limit")
             category = item.metadata.get("category")
             group_key = (
                 category_to_group.get(category, default_group)
@@ -1675,11 +1908,11 @@ class HorizonOrchestrator:
             else:
                 limit = digest.default_group_limit
             if limit is not None and group_counts[group_key] >= limit:
-                return False
+                return reject(item, "group_limit")
 
             profile_limit = None if is_unbounded_profile else profile_limits.get(profile_id)
             if profile_limit is not None and profile_counts[profile_id] >= profile_limit:
-                return False
+                return reject(item, "profile_limit")
 
             trend_pool = None
             if profile_id == _PLATFORM_TREND_PROFILE_ID:
@@ -1693,13 +1926,25 @@ class HorizonOrchestrator:
                     trend_pool_limit is not None
                     and trend_pool_counts[trend_pool] >= trend_pool_limit
                 ):
-                    return False
+                    return reject(item, f"platform_trend_{trend_pool}_limit")
+
+                platform_limit = digest.platform_trend_max_per_platform
+                platforms = self._platform_trend_platforms(item)
+                if platform_limit is not None and platforms and all(
+                    trend_platform_counts[platform] >= platform_limit
+                    for platform in platforms
+                ):
+                    return reject(item, "platform_trend_platform_limit")
 
             selected.append((item, group_key))
             group_counts[group_key] += 1
             profile_counts[profile_id] += 1
             if trend_pool is not None:
                 trend_pool_counts[trend_pool] += 1
+                platform_limit = digest.platform_trend_max_per_platform
+                for platform in self._platform_trend_platforms(item):
+                    if platform_limit is None or trend_platform_counts[platform] < platform_limit:
+                        trend_platform_counts[platform] += 1
             return True
 
         selected_objects: set[int] = set()
@@ -1725,7 +1970,7 @@ class HorizonOrchestrator:
                 if try_select(item):
                     selected_objects.add(id(item))
                     for platform in platforms:
-                        platform_counts[platform] += 1
+                        platform_counts[platform] = trend_platform_counts[platform]
 
         for item in sorted_items:
             if id(item) in selected_objects:

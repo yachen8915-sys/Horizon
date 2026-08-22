@@ -17,11 +17,26 @@ ANALYSIS_RULES = f"""You are a content curator evaluating an item under the supp
 def analysis_system_prompt(profile: LoadedProfile) -> str:
     editorial_guidance = ""
     if profile.id == "pangmen-platform-trend-radar":
+        editorial_guidance = """
+Do not reject a topic only because it is entertainment, sports, celebrity, or
+short-lived public curiosity. Judge the topic type as a label, then assess its
+actual heat and whether there is a natural, evidence-backed content extension
+for Pangmen. Pure AI product/model news belongs in the AI profiles, but a public
+topic involving consumer behavior, content spread, brands, platforms, social
+sentiment, or ordinary people's decisions may remain here. Provide up to three
+specific extension_angles; do not invent an angle when the supplied evidence is
+only a bare title. Keep operations_score, content_opportunity_score, and
+evidence_quality_score independent. The program applies the final gates.
+"""
         output_contract = """{
   "score": <same value as operations_score, from 0 to 10>,
   "operations_score": <number from 0 to 10>,
   "content_opportunity_score": <number from 0 to 10>,
   "operations_reason": "<one sentence explaining why operations should care>",
+  "extension_score": <derived 0 to 10 score for the natural Pangmen content extension>,
+  "extension_angles": ["<up to three specific, evidence-backed angles>"],
+  "extension_reason": "<one sentence explaining why the extension is or is not natural>",
+  "evidence_quality_score": <number from 0 to 10>,
   "reason": "<concise explanation of both scores>",
   "summary": "<one or two sentence factual hotspot brief>",
   "tags": ["<tag>", "..."]
@@ -149,6 +164,31 @@ def analysis_user_prompt(
         if metadata:
             metadata_section = (
                 "\nVerified social engagement summary: "
+                + json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+            )
+    elif profile_id == "pangmen-platform-trend-radar":
+        keys = (
+            "platform",
+            "platforms",
+            "providers",
+            "rank",
+            "rank_limit",
+            "hot_value",
+            "heat_score",
+            "heat_percentile",
+            "rank_score",
+            "trend_type",
+            "trend_previous_heat_score",
+            "trend_history_count",
+            "cross_platform_count",
+            "source_tier",
+            "reliability",
+            "source_url_kind",
+        )
+        metadata = {key: item.metadata[key] for key in keys if key in item.metadata}
+        if metadata:
+            metadata_section = (
+                "\nVerified platform trend metadata: "
                 + json.dumps(metadata, ensure_ascii=False, sort_keys=True)
             )
     return f"""Analyze the following content.

@@ -121,6 +121,7 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert config["digest"]["platform_trend_leverage_limit"] == 6
     assert config["digest"]["platform_trend_watch_limit"] == 4
     assert config["digest"]["platform_trend_minimum_per_platform"] == 1
+    assert config["digest"]["platform_trend_max_per_platform"] == 2
     editorial = config["digest"]["editorial_selection"]
     assert editorial == {
         "enabled": True,
@@ -156,11 +157,17 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
         "douyin",
         "toutiao",
         "zhihu",
-        "baidu",
         "36kr",
+        "bilibili",
     }
     assert all(provider["api_key_env"] == "ALAPI_TOKEN" for provider in alapi_providers)
     assert all(provider["response_adapter"] == "alapi_tophub" for provider in alapi_providers)
+    assert next(
+        provider for provider in platform_providers if provider["platform"] == "baidu"
+    )["enabled"] is False
+    assert next(
+        provider for provider in platform_providers if provider["platform"] == "36kr"
+    )["source_id"] == "daGJMz"
     assert all(
         not provider["enabled"]
         for provider in platform_providers

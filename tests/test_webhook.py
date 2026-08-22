@@ -1345,10 +1345,15 @@ class TestSendDailySummary:
         watch.profile = "pangmen-platform-trend-radar"
         watch.processing.classification.profile = "pangmen-platform-trend-radar"
         watch.metadata["trend_pool"] = "watch"
+        overflow = _make_item(title="高热度赛事带动城市消费", url="https://example.com/overflow")
+        overflow.profile = "pangmen-platform-trend-radar"
+        overflow.processing.classification.profile = "pangmen-platform-trend-radar"
+        overflow.metadata.update({"heat_score": 9.2, "trend_type": "breaking"})
 
         message = notifier.build_daily_summary_messages(
             summary="# Full summary",
             important_items=[app, tech, trend, watch],
+            platform_trend_overflow=[overflow],
             all_items_count=50,
             date="2026-08-10",
             lang="zh",
@@ -1379,6 +1384,10 @@ class TestSendDailySummary:
             panel for panel in panels if "百花奖获奖名单" in str(panel)
         )
         assert "⭐️" not in str(watch_panel.get("header", {}))
+        overflow_panel = next(
+            panel for panel in panels if "查看更多资讯（1条）" in str(panel)
+        )
+        assert "高热度赛事带动城市消费" in str(overflow_panel)
         del os.environ[_TEST_URL_ENV]
 
     def test_feishu_empty_content_radar_keeps_pangmen_title(self):

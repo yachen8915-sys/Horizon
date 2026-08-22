@@ -95,6 +95,35 @@ def test_newsnow_douyin_without_hot_value_is_only_a_ranked_candidate():
     assert "全网爆火" not in item.content
 
 
+def test_title_only_hotlist_row_uses_explicit_search_fallback_url():
+    client = AsyncMock()
+    client.get.return_value = _response(
+        {
+            "items": [
+                {
+                    "title": "没有原文链接的热榜标题",
+                    "hot": 123,
+                }
+            ]
+        }
+    )
+    provider = PlatformTrendProviderConfig(
+        platform="douyin",
+        provider="fixture",
+        base_url="https://provider.example/douyin",
+    )
+
+    item = asyncio.run(
+        PlatformTrendsScraper(
+            PlatformTrendsConfig(enabled=True, providers=[provider]), client
+        ).fetch(SINCE)
+    )[0]
+
+    assert item.metadata["url_is_search_fallback"] is True
+    assert item.metadata["source_url_kind"] == "search_fallback"
+    assert "douyin.com/search" in str(item.url)
+
+
 def test_alapi_non_core_platform_is_marked_supplemental_discovery():
     client = AsyncMock()
     client.post.return_value = _response(
@@ -340,6 +369,103 @@ def test_alapi_tophub_adapter_posts_token_and_parses_nested_list(monkeypatch):
     assert item.metadata["providers"] == ["ALAPI"]
     assert item.metadata["hot_value"] == 7_760_000
     assert item.published_at.isoformat() == "2026-08-09T09:26:40+00:00"
+
+
+def test_provider_health_records_success_counts_and_update_time(monkeypatch):
+    monkeypatch.setenv("ALAPI_TOKEN", "test-token")
+    client = AsyncMock()
+    response = _response(
+        {
+            "code": 200,
+            "success": True,
+            "data": {
+                "last_update": "2026-08-09 17:26:40",
+                "list": [
+                    {
+                        "title": "可核验榜单内容",
+                        "link": "https://www.douyin.com/hot/ok",
+                        "other": "100万",
+                    }
+                ],
+            },
+        }
+    )
+    response.status_code = 200
+    client.post.return_value = response
+    provider = PlatformTrendProviderConfig(
+        platform="douyin",
+        provider="alapi_tophub",
+        base_url="https://v3.alapi.cn",
+        endpoint="/api/tophub",
+        request_method="POST",
+        response_adapter="alapi_tophub",
+        source_id="BOoYax",
+        api_key_env="ALAPI_TOKEN",
+        api_key_header="token",
+        api_key_prefix="",
+    )
+
+    scraper = PlatformTrendsScraper(
+        PlatformTrendsConfig(enabled=True, providers=[provider]), client
+    )
+    items = asyncio.run(scraper.fetch(SINCE))
+
+    assert len(items) == 1
+    assert scraper.last_provider_health == [
+        {
+            "provider": "alapi_tophub",
+            "provider_name": "alapi_tophub",
+            "platform": "douyin",
+            "status": "ok",
+            "item_count": 1,
+                "latest_visible_at": "2026-08-09T17:26:40+00:00",
+            "title_count": 1,
+            "url_count": 1,
+            "hot_value_count": 1,
+            "http_status": 200,
+            "error": None,
+        }
+    ]
+
+
+def test_provider_business_error_is_recorded_without_blocking_other_provider(caplog):
+    client = AsyncMock()
+    client.get.side_effect = [
+        _response({"code": 401, "success": False, "data": {}}),
+        _response(
+            {
+                "items": [
+                    {
+                        "title": "可用来源内容",
+                        "url": "https://example.com/ok",
+                    }
+                ]
+            }
+        ),
+    ]
+    providers = [
+        PlatformTrendProviderConfig(
+            platform="weibo",
+            provider="provider_a",
+            base_url="https://provider.example/a",
+        ),
+        PlatformTrendProviderConfig(
+            platform="douyin",
+            provider="provider_b",
+            base_url="https://provider.example/b",
+        ),
+    ]
+    scraper = PlatformTrendsScraper(
+        PlatformTrendsConfig(enabled=True, providers=providers), client
+    )
+
+    items = asyncio.run(scraper.fetch(SINCE))
+
+    assert [item.title for item in items] == ["可用来源内容"]
+    assert [health["status"] for health in scraper.last_provider_health] == [
+        "business_error",
+        "ok",
+    ]
 
 
 def test_missing_alapi_token_is_gracefully_skipped(monkeypatch, caplog):

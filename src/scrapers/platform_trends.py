@@ -7,6 +7,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -26,10 +27,13 @@ class PlatformTrendsScraper(BaseScraper):
     def __init__(self, config: PlatformTrendsConfig, http_client: httpx.AsyncClient):
         super().__init__({"platform_trends": config}, http_client)
         self.trends_config = config
+        self.last_provider_health: list[dict[str, Any]] = []
 
     async def fetch(self, since: datetime) -> list[ContentItem]:
         if not self.trends_config.enabled:
+            self.last_provider_health = []
             return []
+        self.last_provider_health = []
         items: list[ContentItem] = []
         for provider in self.trends_config.providers:
             if not provider.enabled:
@@ -37,6 +41,11 @@ class PlatformTrendsScraper(BaseScraper):
             try:
                 items.extend(await self._fetch_provider(provider, since))
             except Exception as exc:
+                self._record_health(
+                    provider,
+                    "http_error",
+                    error=str(exc),
+                )
                 logger.warning(
                     "%s trends via %s unavailable, skipping: %s",
                     provider.platform,
@@ -45,12 +54,42 @@ class PlatformTrendsScraper(BaseScraper):
                 )
         return self._merge_exact_topics(items)
 
+    def _record_health(
+        self,
+        provider: PlatformTrendProviderConfig,
+        status: str,
+        *,
+        item_count: int = 0,
+        latest_visible_at: str | None = None,
+        title_count: int = 0,
+        url_count: int = 0,
+        hot_value_count: int = 0,
+        http_status: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.last_provider_health.append(
+            {
+                "provider": provider.provider,
+                "provider_name": provider.provider_name or provider.provider,
+                "platform": provider.platform,
+                "status": status,
+                "item_count": item_count,
+                "latest_visible_at": latest_visible_at,
+                "title_count": title_count,
+                "url_count": url_count,
+                "hot_value_count": hot_value_count,
+                "http_status": http_status,
+                "error": error,
+            }
+        )
+
     async def _fetch_provider(
         self,
         provider: PlatformTrendProviderConfig,
         since: datetime,
     ) -> list[ContentItem]:
         if provider.base_url is None:
+            self._record_health(provider, "schema_changed", error="missing_base_url")
             logger.warning(
                 "%s trend provider has no base_url, skipping", provider.platform
             )
@@ -62,6 +101,7 @@ class PlatformTrendsScraper(BaseScraper):
         if provider.api_key_env:
             api_key = os.getenv(provider.api_key_env)
             if not api_key:
+                self._record_health(provider, "missing_token", error=provider.api_key_env)
                 logger.warning(
                     "%s not configured, skipping %s provider.",
                     provider.api_key_env,
@@ -98,10 +138,23 @@ class PlatformTrendsScraper(BaseScraper):
         else:
             response = await self.client.get(request_url, **request_kwargs)
         response.raise_for_status()
+        http_status = getattr(response, "status_code", None)
         payload = response.json()
         if not isinstance(payload, dict):
+            self._record_health(
+                provider,
+                "schema_changed",
+                http_status=http_status,
+                error="payload_not_object",
+            )
             return []
-        if payload.get("code") not in (None, 200):
+        if payload.get("code") not in (None, 200) or payload.get("success") is False:
+            self._record_health(
+                provider,
+                "business_error",
+                http_status=http_status,
+                error=f"code={payload.get('code')},success={payload.get('success')}",
+            )
             logger.warning(
                 "%s trends via %s returned provider code %s, skipping",
                 provider.platform,
@@ -113,6 +166,12 @@ class PlatformTrendsScraper(BaseScraper):
         if provider.response_adapter == "alapi_tophub":
             data = payload.get("data")
             if not isinstance(data, dict):
+                self._record_health(
+                    provider,
+                    "schema_changed",
+                    http_status=http_status,
+                    error="missing_data_object",
+                )
                 return []
             rows = data.get("list") or []
             adapter_payload = {
@@ -121,6 +180,12 @@ class PlatformTrendsScraper(BaseScraper):
         else:
             rows = payload.get("items") or payload.get("data") or []
         if not isinstance(rows, list):
+            self._record_health(
+                provider,
+                "schema_changed",
+                http_status=http_status,
+                error="rows_not_list",
+            )
             return []
         observed_at = self._observed_at(
             adapter_payload, provider.observed_timezone
@@ -137,6 +202,13 @@ class PlatformTrendsScraper(BaseScraper):
                 provider.provider,
                 observed_at.isoformat(),
             )
+            self._record_health(
+                provider,
+                "stale",
+                http_status=http_status,
+                latest_visible_at=observed_at.isoformat(),
+                error="snapshot_older_than_since",
+            )
             return []
         items = []
         limit = min(provider.fetch_limit, provider.rank_limit)
@@ -144,6 +216,33 @@ class PlatformTrendsScraper(BaseScraper):
             item = self._row_to_item(row, rank, observed_at, provider)
             if item is not None:
                 items.append(item)
+        title_count = sum(
+            bool(isinstance(row, dict) and str(row.get("title") or row.get("keyword") or "").strip())
+            for row in rows[:limit]
+        )
+        url_count = sum(
+            bool(
+                isinstance(row, dict)
+                and str(row.get("url") or row.get("mobileUrl") or row.get("link") or "").strip()
+            )
+            for row in rows[:limit]
+        )
+        hot_value_count = sum(
+            self._hot_value(row) is not None
+            for row in rows[:limit]
+            if isinstance(row, dict)
+        )
+        self._record_health(
+            provider,
+            "ok" if items else ("schema_changed" if rows else "empty"),
+            item_count=len(items),
+            latest_visible_at=observed_at.isoformat(),
+            title_count=title_count,
+            url_count=url_count,
+            hot_value_count=hot_value_count,
+            http_status=http_status,
+            error="no_valid_title_url_rows" if rows and not items else None,
+        )
         return items
 
     def _row_to_item(
@@ -159,6 +258,10 @@ class PlatformTrendsScraper(BaseScraper):
         url = str(
             row.get("url") or row.get("mobileUrl") or row.get("link") or ""
         ).strip()
+        url_is_search_fallback = False
+        if title and not url:
+            url = self._search_fallback_url(provider.platform, title)
+            url_is_search_fallback = bool(url)
         if not title or not url:
             return None
         raw_id = str(row.get("id") or title)
@@ -185,6 +288,7 @@ class PlatformTrendsScraper(BaseScraper):
         occurrence = {
             "platform": provider.platform,
             "rank": rank,
+            "rank_limit": provider.rank_limit,
             "hot_value": hot_value,
             "url": url,
             "provider": provider_name,
@@ -215,7 +319,10 @@ class PlatformTrendsScraper(BaseScraper):
                 "provider_role": provider_role,
                 "reliability": provider.reliability,
                 "original_url": url,
+                "url_is_search_fallback": url_is_search_fallback,
+                "source_url_kind": "search_fallback" if url_is_search_fallback else "original",
                 "rank": rank,
+                "rank_limit": provider.rank_limit,
                 "hot_value": hot_value,
                 "engagement": (
                     {"hot_value": hot_value} if hot_value is not None else {}
@@ -277,6 +384,20 @@ class PlatformTrendsScraper(BaseScraper):
                 except ValueError:
                     continue
         return None
+
+    @staticmethod
+    def _search_fallback_url(platform: str, title: str) -> str | None:
+        query = quote(title, safe="")
+        hosts = {
+            "weibo": f"https://s.weibo.com/weibo?q={query}",
+            "douyin": f"https://www.douyin.com/search/{query}",
+            "zhihu": f"https://www.zhihu.com/search?q={query}",
+            "bilibili": f"https://search.bilibili.com/all?keyword={query}",
+            "toutiao": f"https://so.toutiao.com/search?keyword={query}",
+            "baidu": f"https://www.baidu.com/s?wd={query}",
+            "36kr": f"https://36kr.com/search/articles/{query}",
+        }
+        return hosts.get(platform)
 
     @staticmethod
     def _topic_key(title: str) -> str:

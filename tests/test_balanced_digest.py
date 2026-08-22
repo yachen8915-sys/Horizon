@@ -656,6 +656,51 @@ def test_platform_trend_digest_keeps_one_candidate_per_platform() -> None:
     assert len(result.items) == 4
 
 
+def test_platform_trend_max_per_platform_caps_single_platform_without_blocking_cross_platform() -> None:
+    filtering = DigestConfig(
+        profile_limits={"pangmen-platform-trend-radar": 6},
+        platform_trend_leverage_limit=6,
+        platform_trend_watch_limit=6,
+        platform_trend_max_per_platform=2,
+    )
+    items = []
+    for index in range(3):
+        item = _set_trend_scores(
+            make_item(
+                f"weibo-{index}",
+                9.0 - index / 10,
+                "platform-trend",
+                "pangmen-platform-trend-radar",
+            ),
+            operations=9.0 - index / 10,
+            content=8.0,
+        )
+        item.metadata.update({"platform": "weibo", "rank": index + 1})
+        items.append(item)
+    cross = _set_trend_scores(
+        make_item(
+            "cross-platform",
+            8.0,
+            "platform-trend",
+            "pangmen-platform-trend-radar",
+        ),
+        operations=8.0,
+        content=8.0,
+    )
+    cross.metadata.update({"platforms": ["weibo", "zhihu"], "rank": 1})
+    items.append(cross)
+
+    orchestrator = make_orchestrator(filtering)
+    result = orchestrator.apply_balanced_digest(items)
+
+    assert [entry.id for entry in result.items] == [
+        "weibo-0",
+        "weibo-1",
+        "cross-platform",
+    ]
+    assert orchestrator.last_balance_exclusions["weibo-2"] == "platform_trend_platform_limit"
+
+
 def test_unconfigured_profiles_only_fill_space_left_by_independent_radar_caps() -> None:
     filtering = DigestConfig(
         max_items=3,

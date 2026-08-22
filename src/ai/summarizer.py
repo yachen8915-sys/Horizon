@@ -982,6 +982,7 @@ class DailySummarizer:
             "wechat": "微信",
             "toutiao": "今日头条",
             "zhihu": "知乎",
+            "bilibili": "B站",
             "baidu": "百度",
             "36kr": "36Kr",
         }

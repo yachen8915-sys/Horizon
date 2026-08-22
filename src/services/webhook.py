@@ -489,6 +489,7 @@ class WebhookNotifier:
         summarizer: DailySummarizer,
         topic_radar: bool,
         content_radar: bool = False,
+        platform_trend_overflow: List[ContentItem] | None = None,
     ) -> dict[str, Any]:
         """Build a single Feishu Card JSON 2.0 message with collapsed item details."""
         overview = self._build_feishu_collapsible_overview(
@@ -639,6 +640,24 @@ class WebhookNotifier:
             add_selected_panels(leverage_items, show_score=True)
             elements.append(_markdown("### 今日大盘观察"))
             add_selected_panels(watch_items, show_score=False)
+            overflow_items = platform_trend_overflow or []
+            if overflow_items:
+                compact_lines = []
+                for item in overflow_items:
+                    analysis = item.processing.analysis if item.processing else None
+                    score = analysis.score if analysis and analysis.score is not None else "?"
+                    heat = item.metadata.get("heat_score")
+                    heat_text = f"热度分 {heat}" if isinstance(heat, (int, float)) else "热度待核"
+                    compact_lines.append(
+                        f"- [{item.title}]({item.url}) · ⭐️ {score}/10 · {heat_text} · "
+                        f"{item.metadata.get('trend_type') or '热点候选'}"
+                    )
+                elements.append(
+                    _collapsible_panel(
+                        f"查看更多资讯（{len(overflow_items)}条）",
+                        "\n".join(compact_lines),
+                    )
+                )
 
             change_group = grouped.get("pangmen-platform-change-radar")
             if change_group is not None and change_group.items:
@@ -748,6 +767,7 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        platform_trend_overflow: List[ContentItem] | None = None,
     ) -> List[dict[str, Any]]:
         """Build the variables for all webhook messages for one language."""
         webhook_languages = getattr(self.config, "languages", None)
@@ -794,6 +814,7 @@ class WebhookNotifier:
                     ),
                     "_request_body_override": self._build_feishu_collapsible_body(
                         important_items=important_items,
+                        platform_trend_overflow=platform_trend_overflow,
                         all_items_count=all_items_count,
                         date=date,
                         lang=lang,
@@ -1088,6 +1109,7 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        platform_trend_overflow: List[ContentItem] | None = None,
     ) -> list[WebhookDeliveryResult]:
         """Send daily summary webhook notification.
 
@@ -1105,6 +1127,7 @@ class WebhookNotifier:
         messages = self.build_daily_summary_messages(
             summary=summary,
             important_items=important_items,
+            platform_trend_overflow=platform_trend_overflow,
             all_items_count=all_items_count,
             date=date,
             lang=lang,

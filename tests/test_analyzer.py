@@ -324,6 +324,9 @@ def test_platform_trend_analysis_uses_independent_operations_and_content_scores(
                 "score": 5,
                 "operations_score": 8.5,
                 "content_opportunity_score": 4.5,
+                "evidence_quality_score": 5.0,
+                "extension_angles": ["从奖项传播看大众文化热点"],
+                "extension_reason": "存在明确的文化传播观察角度。",
                 "operations_reason": "大众娱乐奖项快速升温，运营团队需要关注。",
                 "reason": "运营价值高，但旁门内容机会暂时有限。",
                 "summary": "百花奖相关话题进入多个平台榜单。",
@@ -335,6 +338,17 @@ def test_platform_trend_analysis_uses_independent_operations_and_content_scores(
     item = _make_item("platform:hundred-flowers")
     item.profile = "pangmen-platform-trend-radar"
     item.title = "百花奖获奖名单"
+    item.metadata.update(
+        {
+            "platform": "weibo",
+            "rank": 1,
+            "rank_limit": 30,
+            "hot_value": 9_000_000,
+            "heat_score": 8.5,
+            "trend_type": "rising",
+            "cross_platform_count": 2,
+        }
+    )
     asyncio.run(
         ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
     )
@@ -345,6 +359,9 @@ def test_platform_trend_analysis_uses_independent_operations_and_content_scores(
     assert analysis.operations_score == 8.5
     assert analysis.content_opportunity_score == 4.5
     assert analysis.score == 8.5
+    assert analysis.extension_score == 5.8
+    assert analysis.extension_angles == ["从奖项传播看大众文化热点"]
+    assert '"heat_score": 8.5' in requests[0]["user"]
 
 
 def test_platform_change_analysis_cannot_promote_secondary_evidence_to_official():

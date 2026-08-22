@@ -142,6 +142,11 @@ class ContentAnalysis(BaseModel):
     evidence_quality_score: Optional[float] = Field(
         default=None, ge=0, le=10, allow_inf_nan=False
     )
+    extension_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    extension_angles: List[str] = Field(default_factory=list)
+    extension_reason: Optional[str] = None
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
@@ -593,6 +598,7 @@ class PlatformTrendProviderConfig(BaseModel):
         "zhihu",
         "baidu",
         "36kr",
+        "bilibili",
     ]
     provider: str
     provider_name: Optional[str] = None
@@ -624,6 +630,22 @@ class PlatformTrendProviderConfig(BaseModel):
 class PlatformTrendsConfig(BaseModel):
     enabled: bool = False
     providers: List[PlatformTrendProviderConfig] = Field(default_factory=list)
+    state_file: str = "data/platform_trend_state.json"
+    history_days: int = Field(default=7, ge=1, le=30)
+    heat_standard_threshold: float = Field(default=7.0, ge=0, le=10)
+    heat_high_threshold: float = Field(default=9.0, ge=0, le=10)
+    operations_standard_threshold: float = Field(default=7.0, ge=0, le=10)
+    opportunity_standard_threshold: float = Field(default=6.0, ge=0, le=10)
+    evidence_minimum: float = Field(default=4.0, ge=0, le=10)
+    high_heat_operations_threshold: float = Field(default=5.0, ge=0, le=10)
+    high_heat_opportunity_threshold: float = Field(default=4.0, ge=0, le=10)
+
+    @field_validator("state_file")
+    @classmethod
+    def validate_state_file(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("sources.platform_trends.state_file cannot be empty")
+        return value
 
 
 class PlatformChangeWatcherConfig(BaseModel):
@@ -917,6 +939,7 @@ class DigestConfig(BaseModel):
     platform_trend_leverage_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_minimum_per_platform: Optional[int] = Field(default=None, gt=0)
+    platform_trend_max_per_platform: Optional[int] = Field(default=None, gt=0)
     editorial_selection: EditorialSelectionConfig = Field(
         default_factory=EditorialSelectionConfig
     )

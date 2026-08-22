@@ -19,6 +19,7 @@ from .utils import parse_json_response
 from ..models import ClassificationResult, ContentAnalysis, ContentItem, ProcessingResult
 from ..processing.content import select_content, split_content
 from ..processing.editorial_selection import normalize_editorial_token
+from ..processing.platform_trend_selection import derive_extension_score
 from ..processing.profiles import ProfileRegistry
 
 DEFAULT_THROTTLE_SEC = 0.0
@@ -263,6 +264,13 @@ class ContentAnalyzer:
                     "content_opportunity_score": content_opportunity_score,
                 }
             )
+            extension_score = derive_extension_score(result)
+            if extension_score is not None:
+                result = result.model_copy(
+                    update={
+                        "extension_score": extension_score,
+                    }
+                )
         elif profile.id == "pangmen-platform-change-radar":
             source_level = str(
                 item.metadata.get("source_level") or result.source_level or "unverified"
