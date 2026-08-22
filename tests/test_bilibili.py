@@ -152,3 +152,59 @@ def test_bilibili_retries_one_412_with_configured_delay(monkeypatch) -> None:
     assert items == []
     assert attempts == 2
     assert delays == [2.5]
+
+
+def test_bilibili_dual_channels_merge_same_bvid_and_preserve_discovery_audit() -> None:
+    orders: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        order = request.url.params["order"]
+        orders.append(order)
+        row = {
+            "bvid": "BV1shared",
+            "title": "AI workflow",
+            "description": "body",
+            "author": "Creator",
+            "mid": 9,
+            "pubdate": 1785479400,
+            "play": 1200 if order == "click" else 800,
+            "like": 80,
+            "review": 12,
+            "favorites": 60,
+            "coins": 10,
+            "share": 8,
+        }
+        return httpx.Response(200, json={"code": 0, "data": {"result": [row]}})
+
+    config = BilibiliConfig.model_validate(
+        {
+            "enabled": True,
+            "request_interval_seconds": 0,
+            "discovery_channels": [
+                {"name": "latest", "order": "pubdate"},
+                {"name": "high_performance", "order": "click"},
+            ],
+            "queries": [{"query": "AI", "profile": "pangmen-topic-radar"}],
+        }
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        scraper = BilibiliScraper(config, client)
+        items = asyncio.run(
+            scraper.fetch(datetime(2026, 7, 25, tzinfo=timezone.utc))
+        )
+    finally:
+        asyncio.run(client.aclose())
+
+    assert orders == ["pubdate", "click"]
+    assert [item.id for item in items] == ["bilibili:video:BV1shared"]
+    assert items[0].metadata["discovery_channels"] == [
+        "latest",
+        "high_performance",
+    ]
+    assert items[0].metadata["search_orders"] == ["pubdate", "click"]
+    assert items[0].metadata["engagement"]["views"] == 1200
+    assert scraper.last_discovery_diagnostics["channels"] == {
+        "latest": 1,
+        "high_performance": 1,
+    }

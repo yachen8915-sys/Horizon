@@ -30,11 +30,11 @@
         "topic_dedup": true
       },
       "pangmen-topic-radar": {
-        "threshold": 7.0,
+        "threshold": 6.0,
         "topic_dedup": true
       },
       "pangmen-ai-tech-radar": {
-        "threshold": 7.0,
+        "threshold": 6.0,
         "topic_dedup": true
       },
       "pangmen-platform-trend-radar": {
@@ -344,6 +344,10 @@
       "enabled": true,
       "request_interval_seconds": 2.0,
       "retry_delay_seconds": 5.0,
+      "discovery_channels": [
+        {"name": "latest", "order": "pubdate"},
+        {"name": "high_performance", "order": "click"}
+      ],
       "queries": [
         {
           "query": "数字生命卡兹克",
@@ -435,6 +439,10 @@
       "fetch_24h": true,
       "fetch_7d": true,
       "fetch_hot_topics": true,
+      "fetch_all_24h": true,
+      "fetch_all_7d": false,
+      "all_mode_min_score": 35,
+      "all_mode_lookback_hours": 48,
       "keywords": [
         "OpenAI",
         "Claude Code",
@@ -771,11 +779,13 @@
   "digest": {
     "max_items": 25,
     "profile_limits": {
-      "pangmen-topic-radar": 8,
-      "pangmen-ai-tech-radar": 5,
       "pangmen-platform-trend-radar": 8,
       "pangmen-platform-change-radar": 5
     },
+    "unbounded_profiles": [
+      "pangmen-topic-radar",
+      "pangmen-ai-tech-radar"
+    ],
     "editorial_selection": {
       "enabled": true,
       "state_file": "data/digest_selection_state.json",
@@ -784,7 +794,9 @@
       "primary_entity_limit": 2,
       "topic_cluster_limit": 2,
       "use_case_limit": 2,
-      "tutorial_workflow_limit": 3,
+      "tutorial_workflow_limit": 2,
+      "semantic_cooldown_days": 3,
+      "same_day_semantic_limit": 1,
       "sub_source_limit": 2,
       "max_history_entries": 500
     },

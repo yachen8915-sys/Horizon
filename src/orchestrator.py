@@ -1606,6 +1606,7 @@ class HorizonOrchestrator:
         groups = digest.category_groups
         max_items = digest.max_items
         profile_limits = digest.profile_limits
+        unbounded_profiles = set(digest.unbounded_profiles)
 
         if not groups and max_items is None and not profile_limits:
             return BalancedDigestResult(items=items)
@@ -1655,7 +1656,13 @@ class HorizonOrchestrator:
         default_group = digest.default_group
 
         def try_select(item: ContentItem) -> bool:
-            if max_items is not None and len(selected) >= max_items:
+            profile_id = (
+                item.processing.classification.profile
+                if item.processing
+                else (item.profile if isinstance(item.profile, str) else "")
+            )
+            is_unbounded_profile = profile_id in unbounded_profiles
+            if max_items is not None and len(selected) >= max_items and not is_unbounded_profile:
                 return False
             category = item.metadata.get("category")
             group_key = (
@@ -1670,16 +1677,7 @@ class HorizonOrchestrator:
             if limit is not None and group_counts[group_key] >= limit:
                 return False
 
-            profile_id = (
-                item.processing.classification.profile
-                if item.processing
-                else (
-                    item.profile
-                    if isinstance(item.profile, str)
-                    else ""
-                )
-            )
-            profile_limit = profile_limits.get(profile_id)
+            profile_limit = None if is_unbounded_profile else profile_limits.get(profile_id)
             if profile_limit is not None and profile_counts[profile_id] >= profile_limit:
                 return False
 
@@ -1735,7 +1733,7 @@ class HorizonOrchestrator:
             if try_select(item):
                 selected_objects.add(id(item))
 
-        if max_items is not None:
+        if max_items is not None and not unbounded_profiles:
             selected = selected[:max_items]
 
         final_counts: Dict[str, int] = defaultdict(int)

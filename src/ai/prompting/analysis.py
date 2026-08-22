@@ -50,6 +50,13 @@ announcement, test, tutorial, or case so that the same event can match across so
 For a roundup, use the primary factual update as event_key rather than treating the
 roundup URL itself as a new event. editorial_key must be composed from primary_entity,
 use_case, and content_format; the application will normalize and verify it.
+Canonicalize semantically equivalent user tasks consistently. In particular, ordinary
+end-to-end AI short-drama and AI comic-drama workflows that swap individual tools must
+share topic_cluster `ai_narrative_video_creation` and use_case
+`end_to_end_narrative_video_production` when body evidence supports that classification.
+Social engagement metadata is corroborating evidence only. Evaluate editorial value,
+audience fit, differentiation, and evidence quality independently; never claim that
+engagement proves a factual assertion.
 """
         output_contract = """{
   "score": <number from 0 to 10>,
@@ -66,6 +73,10 @@ use_case, and content_format; the application will normalize and verify it.
   "relevance_score": <number from 0 to 10>,
   "novelty_score": <number from 0 to 10>,
   "demonstrability_score": <number from 0 to 10>
+  ,"editorial_value_score": <number from 0 to 10>
+  ,"audience_fit_score": <number from 0 to 10>
+  ,"differentiation_score": <number from 0 to 10>
+  ,"evidence_quality_score": <number from 0 to 10>
 }"""
     else:
         output_contract = """{
@@ -118,6 +129,28 @@ def analysis_user_prompt(
             "\nPlatform change metadata: "
             + json.dumps(metadata, ensure_ascii=False, sort_keys=True)
         )
+    elif profile_id == "pangmen-topic-radar":
+        keys = (
+            "content_platform",
+            "content_age_hours",
+            "engagement_complete",
+            "views",
+            "likes",
+            "favorites",
+            "comments",
+            "shares",
+            "coins",
+            "danmaku",
+            "engagement_quality_score",
+            "engagement_gate_status",
+            "engagement_gate_reason",
+        )
+        metadata = {key: item.metadata[key] for key in keys if key in item.metadata}
+        if metadata:
+            metadata_section = (
+                "\nVerified social engagement summary: "
+                + json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+            )
     return f"""Analyze the following content.
 
 Title: {item.title}

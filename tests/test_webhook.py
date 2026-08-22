@@ -1185,6 +1185,90 @@ class TestSendDailySummary:
         assert all("旁门左道PPT选题雷达" not in block for block in markdown_blocks)
         del os.environ[_TEST_URL_ENV]
 
+    def test_feishu_collapsible_keeps_ai_overflow_in_more_panel(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(
+            enabled=True,
+            url_env=_TEST_URL_ENV,
+            platform="feishu",
+            layout="collapsible",
+        )
+        notifier = WebhookNotifier(config)
+        items = []
+        for index in range(18):
+            item = _make_item(title=f"AI HOT 条目 {index}")
+            item.profile = "pangmen-topic-radar"
+            item.processing.classification.profile = "pangmen-topic-radar"
+            items.append(item)
+        summarizer = DailySummarizer(
+            profile_order=[
+                "pangmen-topic-radar",
+                "pangmen-ai-tech-radar",
+                "pangmen-platform-trend-radar",
+            ]
+        )
+
+        message = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=items,
+            all_items_count=40,
+            date="2026-08-22",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+
+        elements = message["_request_body_override"]["card"]["body"]["elements"]
+        more = [
+            element
+            for element in elements
+            if element["tag"] == "collapsible_panel"
+            and element["header"]["title"]["content"].startswith("查看更多资讯（2条）")
+        ]
+        assert len(more) == 1
+        assert "AI HOT 条目 16" in more[0]["elements"][0]["content"]
+        del os.environ[_TEST_URL_ENV]
+
+    def test_feishu_collapsible_renders_ai_media_category(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        config = WebhookConfig(
+            enabled=True,
+            url_env=_TEST_URL_ENV,
+            platform="feishu",
+            layout="collapsible",
+        )
+        notifier = WebhookNotifier(config)
+        items = []
+        for index in range(2):
+            item = _make_item(title=f"热门 AI 帖子 {index}")
+            item.profile = "pangmen-topic-radar"
+            item.processing.classification.profile = "pangmen-topic-radar"
+            item.metadata["ai_media_candidate"] = True
+            item.metadata["source_kind"] = "X 推文"
+            items.append(item)
+        summarizer = DailySummarizer(
+            profile_order=["pangmen-topic-radar", "pangmen-ai-tech-radar"]
+        )
+
+        message = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=items,
+            all_items_count=10,
+            date="2026-08-22",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+        elements = message["_request_body_override"]["card"]["body"]["elements"]
+
+        assert "### AI 媒体" in [
+            element["content"] for element in elements if element["tag"] == "markdown"
+        ]
+        assert any(
+            element["tag"] == "collapsible_panel"
+            and "热门 AI 帖子 0" in element["header"]["title"]["content"]
+            for element in elements
+        )
+        del os.environ[_TEST_URL_ENV]
+
     def test_feishu_collapsible_groups_profiles_and_resets_numbering(self):
         os.environ[_TEST_URL_ENV] = _TEST_URL
         config = WebhookConfig(

@@ -501,7 +501,39 @@ class WebhookNotifier:
         )
         elements: list[dict[str, Any]] = [_markdown(overview)]
 
-        view = summarizer.build_view(important_items, lang)
+        ai_profiles = {"pangmen-topic-radar", "pangmen-ai-tech-radar"}
+        ai_items = [
+            item
+            for item in important_items
+            if (
+                item.processing.classification.profile
+                if item.processing
+                else item.profile
+            ) in ai_profiles
+        ]
+        ai_media_items = [
+            item for item in ai_items if item.metadata.get("ai_media_candidate") is True
+        ]
+        editorial_ai_items = [item for item in ai_items if item not in ai_media_items]
+        detail_ai_items = editorial_ai_items[:16]
+        detail_ai_media_items = ai_media_items[:8]
+        more_ai_items = editorial_ai_items[16:] + ai_media_items[8:]
+        detail_ids = {
+            item.id for item in [*detail_ai_items, *detail_ai_media_items]
+        }
+        display_items = [
+            item
+            for item in important_items
+            if (
+                (
+                    item.processing.classification.profile
+                    if item.processing
+                    else item.profile
+                ) not in ai_profiles
+                or item.id in detail_ids
+            )
+        ]
+        view = summarizer.build_view(display_items, lang)
         if content_radar:
             grouped = {group.profile_id: group for group in view.groups}
 
@@ -535,6 +567,30 @@ class WebhookNotifier:
             add_panels(grouped.get("pangmen-topic-radar"))
             elements.append(_markdown("### AI 技术"))
             add_panels(grouped.get("pangmen-ai-tech-radar"))
+            if detail_ai_media_items:
+                elements.append(_markdown("### AI 媒体"))
+                media_view = summarizer.build_view(detail_ai_media_items, lang)
+                for media_group in media_view.groups:
+                    add_panels(media_group)
+            if more_ai_items:
+                compact_lines = []
+                for item in more_ai_items:
+                    analysis = item.processing.analysis if item.processing else None
+                    score = analysis.score if analysis and analysis.score is not None else "?"
+                    source = str(item.metadata.get("source_kind") or item.source_type.value)
+                    value = (analysis.summary if analysis and analysis.summary else item.content or item.title)
+                    value = " ".join(str(value).split())
+                    if len(value) > 120:
+                        value = value[:117].rstrip() + "..."
+                    compact_lines.append(
+                        f"- [{item.title}]({item.url}) · ⭐️ {score}/10 · {source} — {value}"
+                    )
+                elements.append(
+                    _collapsible_panel(
+                        f"查看更多资讯（{len(more_ai_items)}条）",
+                        "\n".join(compact_lines),
+                    )
+                )
             trend_group = grouped.get("pangmen-platform-trend-radar")
             leverage_items = []
             watch_items = []

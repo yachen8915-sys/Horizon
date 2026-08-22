@@ -51,6 +51,17 @@ def canonical_editorial_key(item: ContentItem) -> str:
     return "|".join(parts) if all(parts) else ""
 
 
+def canonical_semantic_key(item: ContentItem) -> str:
+    analysis = item.processing.analysis if item.processing else None
+    if analysis is None:
+        return ""
+    parts = (
+        normalize_editorial_token(analysis.topic_cluster),
+        normalize_editorial_token(analysis.use_case),
+    )
+    return "|".join(parts) if all(parts) else ""
+
+
 def canonical_url(value: str) -> str:
     parsed = urlsplit(value)
     query = [
@@ -133,6 +144,7 @@ class EditorialSelector:
         use_case_counts: dict[str, int] = defaultdict(int)
         format_counts: dict[str, int] = defaultdict(int)
         source_counts: dict[str, int] = defaultdict(int)
+        semantic_counts: dict[str, int] = defaultdict(int)
         selected_by_dimension: dict[tuple[str, str], str] = {}
 
         for item in sorted(candidates, key=self._sort_key):
@@ -145,6 +157,7 @@ class EditorialSelector:
             use_case = normalize_editorial_token(analysis.use_case)
             content_format = normalize_editorial_token(analysis.content_format)
             source = sub_source_key(item)
+            semantic = canonical_semantic_key(item)
 
             if item_profile == TOPIC_PROFILE:
                 limits = (
@@ -158,6 +171,7 @@ class EditorialSelector:
                         "diversity_format_limit",
                     ),
                     ("sub_source", source, self.config.sub_source_limit, "diversity_source_limit"),
+                    ("semantic", semantic, self.config.same_day_semantic_limit, "diversity_semantic_limit"),
                 )
                 rejected = False
                 counters = {
@@ -166,6 +180,7 @@ class EditorialSelector:
                     "use_case": use_case_counts,
                     "content_format": format_counts,
                     "sub_source": source_counts,
+                    "semantic": semantic_counts,
                 }
                 for dimension, value, limit, reason in limits:
                     if not value or limit is None:
@@ -190,6 +205,7 @@ class EditorialSelector:
                     ("use_case", use_case, use_case_counts),
                     ("content_format", content_format, format_counts),
                     ("sub_source", source, source_counts),
+                    ("semantic", semantic, semantic_counts),
                 ):
                     if value:
                         counter[value] += 1
@@ -230,6 +246,7 @@ class EditorialSelector:
                     "url": canonical_url(str(item.url)),
                     "event_key": normalize_editorial_token(analysis.event_key),
                     "editorial_key": canonical_editorial_key(item),
+                    "semantic_key": canonical_semantic_key(item),
                     "primary_entity": normalize_editorial_token(analysis.primary_entity),
                     "topic_cluster": normalize_editorial_token(analysis.topic_cluster),
                     "use_case": normalize_editorial_token(analysis.use_case),
@@ -259,9 +276,11 @@ class EditorialSelector:
         url = canonical_url(str(item.url))
         event_key = normalize_editorial_token(analysis.event_key)
         editorial_key = canonical_editorial_key(item)
+        semantic_key = canonical_semantic_key(item)
         novelty_level = normalize_editorial_token(analysis.novelty_level)
         history_cutoff = now - timedelta(days=self.config.history_days)
         editorial_cutoff = now - timedelta(days=self.config.editorial_cooldown_days)
+        semantic_cutoff = now - timedelta(days=self.config.semantic_cooldown_days)
 
         for record in reversed(state_items):
             selected_at = self._parse_datetime(record.get("selected_at"))
@@ -287,6 +306,18 @@ class EditorialSelector:
                     limit_value=self.config.history_days,
                 )
             if (
+                selected_at >= semantic_cutoff
+                and semantic_key
+                and record.get("semantic_key") == semantic_key
+                and novelty_level not in EDITORIAL_COOLDOWN_BYPASS
+            ):
+                return EditorialExclusion(
+                    reason="cross_day_semantic_cooldown",
+                    replaced_by_id=replaced_by_id,
+                    limit_key="semantic_key:3d",
+                    limit_value=self.config.semantic_cooldown_days,
+                )
+            if (
                 selected_at >= editorial_cutoff
                 and editorial_key
                 and record.get("editorial_key") == editorial_key
@@ -301,13 +332,17 @@ class EditorialSelector:
         return None
 
     @staticmethod
-    def _sort_key(item: ContentItem) -> tuple[float, float, float, float, float, str]:
+    def _sort_key(item: ContentItem) -> tuple:
         analysis = item.processing.analysis if item.processing else None
         published_at = EditorialSelector._as_utc(item.published_at)
         return (
             -float(analysis.score if analysis.score is not None else -1.0)
             if analysis
             else 1.0,
+            -float(analysis.editorial_value_score if analysis.editorial_value_score is not None else -1.0) if analysis else 1.0,
+            -float(analysis.audience_fit_score if analysis.audience_fit_score is not None else -1.0) if analysis else 1.0,
+            -float(analysis.differentiation_score if analysis.differentiation_score is not None else -1.0) if analysis else 1.0,
+            -float(analysis.evidence_quality_score if analysis.evidence_quality_score is not None else -1.0) if analysis else 1.0,
             -float(
                 analysis.relevance_score
                 if analysis.relevance_score is not None

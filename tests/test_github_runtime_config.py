@@ -106,15 +106,17 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     )
 
     settings = config["processing"]["profile_settings"]
-    assert settings["pangmen-topic-radar"]["threshold"] == 7.0
-    assert settings["pangmen-ai-tech-radar"]["threshold"] == 7.0
+    assert settings["pangmen-topic-radar"]["threshold"] == 6.0
+    assert settings["pangmen-ai-tech-radar"]["threshold"] == 6.0
     assert settings["pangmen-platform-trend-radar"]["threshold"] == 7.0
     assert config["digest"]["profile_limits"] == {
-        "pangmen-topic-radar": 8,
-        "pangmen-ai-tech-radar": 5,
         "pangmen-platform-trend-radar": 8,
         "pangmen-platform-change-radar": 5,
     }
+    assert config["digest"]["unbounded_profiles"] == [
+        "pangmen-topic-radar",
+        "pangmen-ai-tech-radar",
+    ]
     assert config["digest"]["max_items"] == 25
     assert config["digest"]["platform_trend_leverage_limit"] == 6
     assert config["digest"]["platform_trend_watch_limit"] == 4
@@ -128,7 +130,9 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
         "primary_entity_limit": 2,
         "topic_cluster_limit": 2,
         "use_case_limit": 2,
-        "tutorial_workflow_limit": 3,
+        "tutorial_workflow_limit": 2,
+        "semantic_cooldown_days": 3,
+        "same_day_semantic_limit": 1,
         "sub_source_limit": 2,
         "max_history_entries": 500,
     }

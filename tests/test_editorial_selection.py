@@ -78,7 +78,9 @@ def make_selector(tmp_path, **overrides) -> EditorialSelector:
         "primary_entity_limit": 2,
         "topic_cluster_limit": 2,
         "use_case_limit": 2,
-        "tutorial_workflow_limit": 3,
+        "tutorial_workflow_limit": 2,
+        "semantic_cooldown_days": 3,
+        "same_day_semantic_limit": 1,
         "sub_source_limit": 2,
         "max_history_entries": 100,
     }
@@ -155,9 +157,9 @@ def test_short_drama_tutorials_are_distinct_events_but_topic_and_use_case_are_li
 
     result = selector.select(items, now=datetime(2026, 8, 19, tzinfo=timezone.utc))
 
-    assert [item.id for item in result.items] == ["short-drama-0", "short-drama-1"]
+    assert [item.id for item in result.items] == ["short-drama-0"]
     assert {entry.reason for entry in result.exclusions.values()} == {
-        "diversity_topic_limit"
+        "diversity_semantic_limit"
     }
     assert len({item.processing.analysis.event_key for item in items}) == 4
 
@@ -186,8 +188,64 @@ def test_tutorial_workflow_has_an_independent_total_limit(tmp_path):
 
     result = selector.select(items, now=datetime(2026, 8, 19, tzinfo=timezone.utc))
 
-    assert len(result.items) == 3
-    assert result.exclusions["tutorial-3"].reason == "diversity_format_limit"
+    assert len(result.items) == 2
+    assert result.exclusions["tutorial-2"].reason == "diversity_format_limit"
+
+
+def test_cross_day_topic_and_use_case_semantic_cooldown(tmp_path):
+    selector = make_selector(tmp_path)
+    previous = make_editorial_item(
+        "previous-workflow",
+        entity="tool-a",
+        topic="ai_narrative_video_creation",
+        use_case="end_to_end_narrative_video_production",
+        content_format="tutorial_workflow",
+    )
+    selector.record_selected(
+        [previous], now=datetime(2026, 8, 18, tzinfo=timezone.utc)
+    )
+    repackaged = make_editorial_item(
+        "repackaged-workflow",
+        entity="tool-b",
+        topic="ai_narrative_video_creation",
+        use_case="end_to_end_narrative_video_production",
+        content_format="tutorial_workflow",
+        novelty_level="evergreen_repackage",
+    )
+
+    result = selector.select(
+        [repackaged], now=datetime(2026, 8, 20, tzinfo=timezone.utc)
+    )
+
+    assert result.exclusions["repackaged-workflow"].reason == (
+        "cross_day_semantic_cooldown"
+    )
+
+
+def test_material_update_bypasses_semantic_cooldown(tmp_path):
+    selector = make_selector(tmp_path)
+    previous = make_editorial_item(
+        "old-feature",
+        entity="tool-a",
+        topic="office_automation",
+        use_case="document_generation",
+        content_format="feature_update",
+    )
+    selector.record_selected(
+        [previous], now=datetime(2026, 8, 19, tzinfo=timezone.utc)
+    )
+    update = make_editorial_item(
+        "material-feature",
+        entity="tool-b",
+        topic="office_automation",
+        use_case="document_generation",
+        content_format="feature_update",
+        novelty_level="material_update",
+    )
+
+    assert selector.select(
+        [update], now=datetime(2026, 8, 20, tzinfo=timezone.utc)
+    ).items == [update]
 
 
 def test_use_case_limit_is_reported_when_topics_and_entities_are_distinct(tmp_path):
@@ -373,7 +431,7 @@ def test_editorial_cooldown_rejects_non_material_repackage(tmp_path):
     )
 
     assert result.exclusions["new-tutorial"].reason == (
-        "cross_day_editorial_cooldown"
+        "cross_day_semantic_cooldown"
     )
 
 
@@ -521,8 +579,8 @@ def test_august_19_real_candidate_replay_meets_editorial_acceptance(tmp_path):
 
     assert len(selected) == 8
     assert sum(a.primary_entity == "gemini" for a in selected_analysis) == 2
-    assert sum(a.topic_cluster == "ai_short_drama" for a in selected_analysis) == 2
-    assert sum(a.content_format == "tutorial_workflow" for a in selected_analysis) == 3
+    assert sum(a.topic_cluster == "ai_short_drama" for a in selected_analysis) == 1
+    assert sum(a.content_format == "tutorial_workflow" for a in selected_analysis) <= 2
     assert len({a.topic_cluster for a in selected_analysis}) >= 4
-    assert len(result.exclusions) == 3
+    assert len(result.exclusions) == 4
     assert all(exclusion.reason for exclusion in result.exclusions.values())

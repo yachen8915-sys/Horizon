@@ -130,6 +130,18 @@ class ContentAnalysis(BaseModel):
     demonstrability_score: Optional[float] = Field(
         default=None, ge=0, le=10, allow_inf_nan=False
     )
+    editorial_value_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    audience_fit_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    differentiation_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    evidence_quality_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
@@ -517,20 +529,38 @@ class BilibiliQueryConfig(BaseModel):
     profile: ProfileRoute = None
 
 
+class BilibiliDiscoveryChannelConfig(BaseModel):
+    """Auditable public-search route used for one Bilibili query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    order: Literal["pubdate", "click", "totalrank", "dm", "stow"]
+
+
 class BilibiliConfig(BaseModel):
     enabled: bool = False
     queries: List[BilibiliQueryConfig] = Field(default_factory=list)
     request_interval_seconds: float = Field(default=1.5, ge=0)
     retry_delay_seconds: float = Field(default=3.0, ge=0)
+    discovery_channels: List[BilibiliDiscoveryChannelConfig] = Field(
+        default_factory=lambda: [
+            BilibiliDiscoveryChannelConfig(name="latest", order="pubdate")
+        ]
+    )
 
 
 class AIHotConfig(BaseModel):
-    """Anonymous, read-only AI HOT v1 supplement source."""
+    """Anonymous, read-only AI HOT supplement source."""
 
     enabled: bool = False
     fetch_24h: bool = True
     fetch_7d: bool = True
     fetch_hot_topics: bool = True
+    fetch_all_24h: bool = True
+    fetch_all_7d: bool = False
+    all_mode_min_score: int = Field(default=35, ge=0, le=100)
+    all_mode_lookback_hours: int = Field(default=48, ge=1, le=168)
     keywords: List[str] = Field(default_factory=list)
     limit: int = Field(default=100, ge=1, le=100)
     request_interval_seconds: float = Field(default=1.0, ge=0)
@@ -856,10 +886,12 @@ class EditorialSelectionConfig(BaseModel):
     state_file: str = "data/digest_selection_state.json"
     history_days: int = Field(default=7, ge=1)
     editorial_cooldown_days: int = Field(default=3, ge=1)
+    semantic_cooldown_days: int = Field(default=3, ge=1)
+    same_day_semantic_limit: int = Field(default=1, ge=1)
     primary_entity_limit: int = Field(default=2, ge=1)
     topic_cluster_limit: int = Field(default=2, ge=1)
     use_case_limit: int = Field(default=2, ge=1)
-    tutorial_workflow_limit: int = Field(default=3, ge=1)
+    tutorial_workflow_limit: int = Field(default=2, ge=1)
     sub_source_limit: int = Field(default=2, ge=1)
     max_history_entries: int = Field(default=500, ge=1)
 
@@ -881,6 +913,7 @@ class DigestConfig(BaseModel):
     default_group: str = "other"
     default_group_limit: Optional[int] = Field(default=None, gt=0)
     profile_limits: Dict[str, int] = Field(default_factory=dict)
+    unbounded_profiles: List[str] = Field(default_factory=list)
     platform_trend_leverage_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_minimum_per_platform: Optional[int] = Field(default=None, gt=0)
@@ -896,6 +929,15 @@ class DigestConfig(BaseModel):
             raise ValueError("digest.profile_limits keys must be non-empty strings")
         if any(limit <= 0 for limit in value.values()):
             raise ValueError("digest.profile_limits values must be greater than zero")
+        return value
+
+    @field_validator("unbounded_profiles")
+    @classmethod
+    def validate_unbounded_profiles(cls, value: List[str]) -> List[str]:
+        if any(not profile_id.strip() for profile_id in value):
+            raise ValueError("digest.unbounded_profiles entries must be non-empty strings")
+        if len(value) != len(set(value)):
+            raise ValueError("digest.unbounded_profiles entries must be unique")
         return value
 
     @field_validator("profile_order")

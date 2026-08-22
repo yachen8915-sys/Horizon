@@ -382,6 +382,33 @@ def test_platform_trends_share_dynamic_global_cap_with_ai_topics() -> None:
     assert trend_count + app_count == 25
 
 
+def test_unbounded_ai_profiles_are_not_cut_by_global_cap() -> None:
+    filtering = DigestConfig(
+        max_items=3,
+        profile_limits={"pangmen-platform-trend-radar": 2},
+        unbounded_profiles=["pangmen-topic-radar", "pangmen-ai-tech-radar"],
+    )
+    items = [
+        make_item(f"app-{index}", 9 - index / 10, "ai", "pangmen-topic-radar")
+        for index in range(5)
+    ]
+    items.extend(
+        make_item(f"trend-{index}", 8, "trend", "pangmen-platform-trend-radar")
+        for index in range(2)
+    )
+
+    result = make_orchestrator(filtering).apply_balanced_digest(items)
+
+    assert sum(
+        item.processing.classification.profile == "pangmen-topic-radar"
+        for item in result.items
+    ) == 5
+    assert sum(
+        item.processing.classification.profile == "pangmen-platform-trend-radar"
+        for item in result.items
+    ) <= 2
+
+
 def test_platform_trend_items_use_heat_as_a_tiebreaker() -> None:
     filtering = DigestConfig(max_items=1)
     lower_heat = make_item(
@@ -949,15 +976,15 @@ def test_august_19_replay_gives_every_rejected_item_an_explicit_reason(tmp_path)
     selected_analysis = [item.processing.analysis for item in filtered.items]
     assert len(filtered.items) == 8
     assert sum(a.primary_entity == "gemini" for a in selected_analysis) == 2
-    assert sum(a.topic_cluster == "ai_short_drama" for a in selected_analysis) == 2
-    assert sum(a.content_format == "tutorial_workflow" for a in selected_analysis) == 3
+    assert sum(a.topic_cluster == "ai_short_drama" for a in selected_analysis) == 1
+    assert sum(a.content_format == "tutorial_workflow" for a in selected_analysis) <= 2
     assert len({a.topic_cluster for a in selected_analysis}) >= 4
     assert len(diagnostics["items"]) == 4
     assert sorted(row["reason"] for row in diagnostics["items"]) == [
-        "digest_limit",
         "diversity_entity_limit",
-        "diversity_topic_limit",
-        "diversity_topic_limit",
+        "diversity_semantic_limit",
+        "diversity_semantic_limit",
+        "diversity_semantic_limit",
     ]
     assert all(row["replaced_by_id"] for row in diagnostics["items"][:3])
 
