@@ -18,6 +18,7 @@ from ..ai.markdown_utils import clean_app_summary_markdown
 from ..console_icons import get_icons
 from ..models import ContentItem, WebhookConfig
 from ..ai.summarizer import DailySummarizer
+from ..processing.breakout_selection import canonical_identity
 from ..url_security import UnsafeURLError, safe_request, validate_http_url
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,38 @@ def _collapsible_panel(title: str, content: str) -> dict[str, Any]:
         "border": {"color": "grey", "corner_radius": "5px"},
         "elements": [_markdown(content)],
     }
+
+
+def _breakout_panel_title(item: ContentItem, title: str) -> str:
+    status = str(item.metadata.get("breakout_status") or "")
+    if status == "breakout":
+        return f"🔥 爆点 · {title}"
+    if status == "hot_unverified":
+        return f"🔥 热议·待核实 · {title}"
+    return title
+
+
+def _dedupe_display_items(items: List[ContentItem]) -> List[ContentItem]:
+    """Defensively keep one card entry per ID, canonical URL, or event."""
+    unique: list[ContentItem] = []
+    seen_ids: set[str] = set()
+    seen_urls: set[str] = set()
+    seen_events: set[str] = set()
+    for item in items:
+        item_id, url, event_key = canonical_identity(item)
+        if (
+            item_id in seen_ids
+            or (url and url in seen_urls)
+            or (event_key and event_key in seen_events)
+        ):
+            continue
+        unique.append(item)
+        seen_ids.add(item_id)
+        if url:
+            seen_urls.add(url)
+        if event_key:
+            seen_events.add(event_key)
+    return unique
 
 
 def _extract_headers(headers_str: Optional[str]) -> dict:
@@ -492,6 +525,16 @@ class WebhookNotifier:
         platform_trend_overflow: List[ContentItem] | None = None,
     ) -> dict[str, Any]:
         """Build a single Feishu Card JSON 2.0 message with collapsed item details."""
+        main_object_ids = {id(item) for item in important_items}
+        all_display_items = _dedupe_display_items(
+            [*important_items, *(platform_trend_overflow or [])]
+        )
+        important_items = [
+            item for item in all_display_items if id(item) in main_object_ids
+        ]
+        platform_trend_overflow = [
+            item for item in all_display_items if id(item) not in main_object_ids
+        ]
         overview = self._build_feishu_collapsible_overview(
             item_count=len(important_items),
             all_items_count=all_items_count,
@@ -513,15 +556,19 @@ class WebhookNotifier:
             ) in ai_profiles
         ]
         ai_media_items = [
-            item for item in ai_items if item.metadata.get("ai_media_candidate") is True
+            item
+            for item in ai_items
+            if item.metadata.get("display_section") == "ai_media"
+            or (
+                not item.metadata.get("display_section")
+                and item.metadata.get("ai_media_candidate") is True
+            )
         ]
         editorial_ai_items = [item for item in ai_items if item not in ai_media_items]
         detail_ai_items = editorial_ai_items[:16]
         detail_ai_media_items = ai_media_items[:8]
         more_ai_items = editorial_ai_items[16:] + ai_media_items[8:]
-        detail_ids = {
-            item.id for item in [*detail_ai_items, *detail_ai_media_items]
-        }
+        detail_ids = {item.id for item in detail_ai_items}
         display_items = [
             item
             for item in important_items
@@ -549,7 +596,10 @@ class WebhookNotifier:
                     )
                     elements.append(
                         _collapsible_panel(
-                            f"{view_item.index}. {view_item.title}{score_suffix}",
+                            _breakout_panel_title(
+                                view_item.item,
+                                f"{view_item.index}. {view_item.title}{score_suffix}",
+                            ),
                             _format_markdown_for_webhook(
                                 summarizer.generate_webhook_item(
                                     view_item.item,
@@ -584,7 +634,8 @@ class WebhookNotifier:
                     if len(value) > 120:
                         value = value[:117].rstrip() + "..."
                     compact_lines.append(
-                        f"- [{item.title}]({item.url}) · ⭐️ {score}/10 · {source} — {value}"
+                        f"- [{_breakout_panel_title(item, item.title)}]({item.url})"
+                        f" · ⭐️ {score}/10 · {source} — {value}"
                     )
                 elements.append(
                     _collapsible_panel(
@@ -621,7 +672,10 @@ class WebhookNotifier:
                     )
                     elements.append(
                         _collapsible_panel(
-                            f"{view_item.index}. {view_item.title}{score_suffix}",
+                            _breakout_panel_title(
+                                view_item.item,
+                                f"{view_item.index}. {view_item.title}{score_suffix}",
+                            ),
                             _format_markdown_for_webhook(
                                 summarizer.generate_webhook_item(
                                     view_item.item,
@@ -649,7 +703,8 @@ class WebhookNotifier:
                     heat = item.metadata.get("heat_score")
                     heat_text = f"热度分 {heat}" if isinstance(heat, (int, float)) else "热度待核"
                     compact_lines.append(
-                        f"- [{item.title}]({item.url}) · ⭐️ {score}/10 · {heat_text} · "
+                        f"- [{_breakout_panel_title(item, item.title)}]({item.url})"
+                        f" · ⭐️ {score}/10 · {heat_text} · "
                         f"{item.metadata.get('trend_type') or '热点候选'}"
                     )
                 elements.append(
@@ -686,7 +741,9 @@ class WebhookNotifier:
                     for view_item in by_platform[platform]:
                         elements.append(
                             _collapsible_panel(
-                                view_item.title,
+                                _breakout_panel_title(
+                                    view_item.item, view_item.title
+                                ),
                                 _format_markdown_for_webhook(
                                     summarizer.generate_webhook_item(
                                         view_item.item,

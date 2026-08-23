@@ -83,6 +83,70 @@ def test_unconfigured_balanced_digest_preserves_old_behavior() -> None:
     assert result.items is items
 
 
+def test_canonical_theme_blocks_equivalent_tutorials_with_different_topic_labels() -> None:
+    config = EditorialSelectionConfig(enabled=True, same_day_semantic_limit=1)
+    first = make_item("better-short-drama", 8.0, "ai", "pangmen-topic-radar")
+    second = make_item("weaker-short-drama", 7.0, "ai", "pangmen-topic-radar")
+    for item, topic in (
+        (first, "ai_video_creation"),
+        (second, "ai_narrative_video_creation"),
+    ):
+        item.processing.analysis = ContentAnalysis(
+            score=8.0 if item is first else 7.0,
+            reason="test",
+            summary=item.title,
+            primary_entity="different_tool",
+            topic_cluster=topic,
+            canonical_theme="ai_narrative_video_workflow",
+            use_case="end_to_end_narrative_video_production",
+            content_format="tutorial_workflow",
+            novelty_level="evergreen_repackage",
+            event_key=f"event_{item.id}",
+            editorial_key=f"different_tool|end_to_end_narrative_video_production|tutorial_workflow",
+            relevance_score=8.0,
+            novelty_score=6.0,
+            demonstrability_score=8.0,
+        )
+
+    result = EditorialSelector(config).select([second, first])
+
+    assert result.items == [first]
+    assert result.exclusions[second.id].reason == "semantic_theme_repeat"
+    assert result.exclusions[second.id].replaced_by_id == first.id
+
+
+def test_material_updates_with_same_theme_remain_distinct_events() -> None:
+    config = EditorialSelectionConfig(enabled=True, same_day_semantic_limit=1)
+    items = []
+    for item_id, use_case in (
+        ("message-integration", "message_integration"),
+        ("voice-mode", "voice_assistance"),
+    ):
+        item = make_item(item_id, 8.0, "ai", "pangmen-topic-radar")
+        item.processing.analysis = ContentAnalysis(
+            score=8.0,
+            reason="test",
+            summary=item.title,
+            primary_entity="chatgpt",
+            topic_cluster="chatgpt_updates",
+            canonical_theme="chatgpt_feature_update",
+            use_case=use_case,
+            content_format="feature_update",
+            novelty_level="material_update",
+            event_key=f"event_{item_id}",
+            editorial_key=f"chatgpt|{use_case}|feature_update",
+            relevance_score=8.0,
+            novelty_score=8.0,
+            demonstrability_score=8.0,
+        )
+        items.append(item)
+
+    result = EditorialSelector(config).select(items)
+
+    assert result.items == items
+    assert result.exclusions == {}
+
+
 def test_category_groups_apply_limits_and_default_group_limit() -> None:
     filtering = DigestConfig(
         category_groups={
@@ -814,6 +878,71 @@ def test_filter_items_applies_editorial_diversity_before_balanced_digest(tmp_pat
     assert result.exclusion_stages["gemini-bts"] == "diversity_entity_limit"
 
 
+def test_filter_items_keeps_six_point_ai_item_and_removes_cross_section_event(
+    tmp_path,
+) -> None:
+    digest = DigestConfig(
+        editorial_selection=EditorialSelectionConfig(
+            enabled=True,
+            state_file=str(tmp_path / "digest-selection-state.json"),
+        )
+    )
+    orchestrator = make_orchestrator(digest)
+    orchestrator.config.processing.profile_settings.update(
+        {
+            "pangmen-topic-radar": ProfileSettingsConfig(
+                threshold=6.0, topic_dedup=False
+            ),
+            "pangmen-platform-trend-radar": ProfileSettingsConfig(
+                threshold=7.0, topic_dedup=False
+            ),
+        }
+    )
+    ai_item = make_item("official-ai-event", 6.0, "ai", "pangmen-topic-radar")
+    ai_item.processing.analysis = ai_item.processing.analysis.model_copy(
+        update={
+            "primary_entity": "example_ai",
+            "topic_cluster": "ai_product_update",
+            "canonical_theme": "ai_product_update",
+            "use_case": "daily_ai_work",
+            "content_format": "feature_update",
+            "novelty_level": "material_update",
+            "event_key": "shared_ai_event",
+            "editorial_key": "example_ai|daily_ai_work|feature_update",
+            "relevance_score": 6.0,
+            "novelty_score": 8.0,
+            "demonstrability_score": 7.0,
+            "evidence_quality_score": 8.0,
+        }
+    )
+    trend_item = make_item(
+        "trend-copy", 9.0, "trend", "pangmen-platform-trend-radar"
+    )
+    trend_item.source_type = SourceType.PLATFORM_TRENDS
+    trend_item.metadata["heat_score"] = 9.5
+    trend_item.processing.analysis = trend_item.processing.analysis.model_copy(
+        update={
+            "operations_score": 9.0,
+            "content_opportunity_score": 8.0,
+            "evidence_quality_score": 8.0,
+            "event_key": "shared_ai_event",
+        }
+    )
+
+    result = asyncio.run(
+        orchestrator.filter_items(
+            [trend_item, ai_item],
+            topic_dedup=False,
+            apply_balance=False,
+            log=False,
+        )
+    )
+
+    assert result.items == [ai_item]
+    assert result.exclusion_stages[trend_item.id] == "cross_section_duplicate"
+    assert ai_item.metadata["display_section"] == "ai_application"
+
+
 def test_editorial_diagnostics_include_selected_rows_labels_and_limit_details(tmp_path) -> None:
     filtering = DigestConfig(
         profile_limits={"pangmen-topic-radar": 8},
@@ -832,6 +961,7 @@ def test_editorial_diagnostics_include_selected_rows_labels_and_limit_details(tm
             update={
                 "primary_entity": "gemini",
                 "topic_cluster": "ai_education",
+                "canonical_theme": "ai_learning_assistant",
                 "use_case": item.id,
                 "content_format": "feature_update",
                 "novelty_level": "material_update",
@@ -862,6 +992,7 @@ def test_editorial_diagnostics_include_selected_rows_labels_and_limit_details(tm
     assert row["reason"] == "diversity_entity_limit"
     assert row["primary_entity"] == "gemini"
     assert row["topic_cluster"] == "ai_education"
+    assert row["canonical_theme"] == "ai_learning_assistant"
     assert row["use_case"] == "gemini-extra"
     assert row["content_format"] == "feature_update"
     assert row["event_key"] == "event-gemini-extra"
@@ -871,6 +1002,8 @@ def test_editorial_diagnostics_include_selected_rows_labels_and_limit_details(tm
     assert row["limit_value"] == 1
     assert diagnostics["selected_items"][0]["id"] == "gemini-best"
     assert diagnostics["selected_items"][0]["score"] == 8.0
+    assert diagnostics["selected_items"][0]["display_section"] == "ai_application"
+    assert diagnostics["breakout_selection"]["breakout_count"] == 0
 
 
 def test_editorial_selection_does_not_lower_threshold_to_fill_topic_limit(tmp_path) -> None:

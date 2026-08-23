@@ -37,6 +37,11 @@ evidence_quality_score independent. The program applies the final gates.
   "extension_angles": ["<up to three specific, evidence-backed angles>"],
   "extension_reason": "<one sentence explaining why the extension is or is not natural>",
   "evidence_quality_score": <number from 0 to 10>,
+  "audience_breadth_score": <number from 0 to 10>,
+  "surprise_score": <number from 0 to 10>,
+  "actionability_score": <number from 0 to 10>,
+  "breakout_reason": "<one evidence-based sentence explaining breakout potential>",
+  "controversial_topic": <true for celebrity rumor, entertainment oddity, or similarly unverified hot discussion>,
   "reason": "<concise explanation of both scores>",
   "summary": "<one or two sentence factual hotspot brief>",
   "tags": ["<tag>", "..."]
@@ -67,7 +72,7 @@ roundup URL itself as a new event. editorial_key must be composed from primary_e
 use_case, and content_format; the application will normalize and verify it.
 Canonicalize semantically equivalent user tasks consistently. In particular, ordinary
 end-to-end AI short-drama and AI comic-drama workflows that swap individual tools must
-share topic_cluster `ai_narrative_video_creation` and use_case
+share canonical_theme `ai_narrative_video_workflow` and use_case
 `end_to_end_narrative_video_production` when body evidence supports that classification.
 Social engagement metadata is corroborating evidence only. Evaluate editorial value,
 audience fit, differentiation, and evidence quality independently; never claim that
@@ -80,6 +85,7 @@ engagement proves a factual assertion.
   "tags": ["<tag>", "..."],
   "primary_entity": "<canonical product, tool, or brand identifier>",
   "topic_cluster": "<canonical topic identifier>",
+  "canonical_theme": "<canonical user-task theme shared by equivalent workflows>",
   "use_case": "<canonical user task or scenario identifier>",
   "content_format": "product_release|feature_update|hands_on_test|tutorial_workflow|case_study|opinion_news",
   "novelty_level": "major_release|material_update|new_example|evergreen_repackage",
@@ -92,6 +98,11 @@ engagement proves a factual assertion.
   ,"audience_fit_score": <number from 0 to 10>
   ,"differentiation_score": <number from 0 to 10>
   ,"evidence_quality_score": <number from 0 to 10>
+  ,"audience_breadth_score": <number from 0 to 10>
+  ,"surprise_score": <number from 0 to 10>
+  ,"actionability_score": <number from 0 to 10>
+  ,"breakout_reason": "<one evidence-based sentence explaining breakout potential>"
+  ,"controversial_topic": false
 }"""
     else:
         output_contract = """{

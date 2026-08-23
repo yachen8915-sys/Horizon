@@ -833,6 +833,7 @@
     "platform_trend_watch_limit": 4,
     "platform_trend_minimum_per_platform": 1,
     "platform_trend_max_per_platform": 2,
+    "controversial_topic_limit": 3,
     "profile_order": [
       "pangmen-topic-radar",
       "pangmen-ai-tech-radar",

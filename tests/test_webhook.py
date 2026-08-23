@@ -820,7 +820,7 @@ class TestWebhookConfigModel:
 def _make_item(title="Test Item", url="https://example.com/test", score=8.0):
     """Create a minimal ContentItem for webhook tests."""
     return ContentItem(
-        id="github:test:1",
+        id=f"github:test:{url}",
         source_type=SourceType.GITHUB,
         title=title,
         url=url,
@@ -1196,7 +1196,10 @@ class TestSendDailySummary:
         notifier = WebhookNotifier(config)
         items = []
         for index in range(18):
-            item = _make_item(title=f"AI HOT 条目 {index}")
+            item = _make_item(
+                title=f"AI HOT 条目 {index}",
+                url=f"https://example.com/aihot-{index}",
+            )
             item.profile = "pangmen-topic-radar"
             item.processing.classification.profile = "pangmen-topic-radar"
             items.append(item)
@@ -1239,11 +1242,16 @@ class TestSendDailySummary:
         notifier = WebhookNotifier(config)
         items = []
         for index in range(2):
-            item = _make_item(title=f"热门 AI 帖子 {index}")
+            item = _make_item(
+                title=f"热门 AI 帖子 {index}",
+                url=f"https://example.com/ai-media-{index}",
+            )
+            item.id = f"ai-media-{index}"
             item.profile = "pangmen-topic-radar"
             item.processing.classification.profile = "pangmen-topic-radar"
             item.metadata["ai_media_candidate"] = True
             item.metadata["source_kind"] = "X 推文"
+            item.metadata["display_section"] = "ai_media"
             items.append(item)
         summarizer = DailySummarizer(
             profile_order=["pangmen-topic-radar", "pangmen-ai-tech-radar"]
@@ -1266,6 +1274,74 @@ class TestSendDailySummary:
             element["tag"] == "collapsible_panel"
             and "热门 AI 帖子 0" in element["header"]["title"]["content"]
             for element in elements
+        )
+        panel_titles = [
+            element["header"]["title"]["content"]
+            for element in elements
+            if element["tag"] == "collapsible_panel"
+        ]
+        assert sum("热门 AI 帖子 0" in title for title in panel_titles) == 1
+        assert sum("热门 AI 帖子 1" in title for title in panel_titles) == 1
+        del os.environ[_TEST_URL_ENV]
+
+    def test_feishu_collapsible_marks_verified_and_unverified_breakouts(self):
+        os.environ[_TEST_URL_ENV] = _TEST_URL
+        notifier = WebhookNotifier(
+            WebhookConfig(
+                enabled=True,
+                url_env=_TEST_URL_ENV,
+                platform="feishu",
+                layout="collapsible",
+            )
+        )
+        verified = _make_item(title="正式爆点")
+        verified.profile = "pangmen-topic-radar"
+        verified.processing.classification.profile = "pangmen-topic-radar"
+        verified.metadata.update(
+            {
+                "display_section": "ai_application",
+                "breakout_status": "breakout",
+            }
+        )
+        unverified = _make_item(
+            title="明星热议线索",
+            url="https://example.com/unverified",
+        )
+        unverified.id = "platform-trend-unverified"
+        unverified.profile = "pangmen-platform-trend-radar"
+        unverified.processing.classification.profile = "pangmen-platform-trend-radar"
+        unverified.metadata.update(
+            {
+                "trend_pool": "watch",
+                "breakout_status": "hot_unverified",
+                "verification_status": "unverified",
+            }
+        )
+        summarizer = DailySummarizer(
+            profile_order=[
+                "pangmen-topic-radar",
+                "pangmen-platform-trend-radar",
+            ]
+        )
+
+        message = notifier.build_daily_summary_messages(
+            summary="# Full summary",
+            important_items=[verified, unverified],
+            all_items_count=2,
+            date="2026-08-23",
+            lang="zh",
+            summarizer=summarizer,
+        )[0]
+        panel_titles = [
+            element["header"]["title"]["content"]
+            for element in message["_request_body_override"]["card"]["body"]["elements"]
+            if element["tag"] == "collapsible_panel"
+        ]
+
+        assert any("🔥 爆点" in title and "正式爆点" in title for title in panel_titles)
+        assert any(
+            "🔥 热议·待核实" in title and "明星热议线索" in title
+            for title in panel_titles
         )
         del os.environ[_TEST_URL_ENV]
 

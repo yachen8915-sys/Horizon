@@ -46,6 +46,7 @@ from .processing.editorial_selection import (
     profile_id as editorial_profile_id,
     sub_source_key as editorial_sub_source_key,
 )
+from .processing.breakout_selection import BreakoutSelector
 from .ai.client import create_ai_client
 from .ai.analyzer import ContentAnalyzer
 from .ai.summarizer import DailySummarizer
@@ -1143,6 +1144,8 @@ class HorizonOrchestrator:
         log: bool = True,
     ) -> FilteringPipelineResult:
         """Apply score thresholding, optional topic dedup, and digest balancing."""
+        breakout_selector = BreakoutSelector(self.config.digest)
+        breakout_selector.annotate(items)
         threshold_items = []
         for item in items:
             if self.passes_profile_filter(item, threshold):
@@ -1213,10 +1216,27 @@ class HorizonOrchestrator:
                 f"→ {len(editorial_items)} candidates\n"
             )
 
+        breakout_result = breakout_selector.select(editorial_items, annotate=False)
+        breakout_items = breakout_result.items
+        for item in editorial_items:
+            exclusion = breakout_result.exclusions.get(item.id)
+            if exclusion is None:
+                self._update_candidate_trace(item, "breakout", "kept")
+                continue
+            item.metadata["editorial_selection"] = {
+                "reason": exclusion.reason,
+                "replaced_by_id": exclusion.replaced_by_id,
+                "limit_key": exclusion.limit_key,
+                "limit_value": exclusion.limit_value,
+            }
+            self._update_candidate_trace(
+                item, "breakout", "dropped", exclusion.reason
+            )
+
         balanced_digest = (
-            self.apply_balanced_digest(editorial_items, log=log)
+            self.apply_balanced_digest(breakout_items, log=log)
             if apply_balance
-            else BalancedDigestResult(items=editorial_items)
+            else BalancedDigestResult(items=breakout_items)
         )
         deduped_ids = {candidate.id for candidate in deduped_items}
         exclusion_stages = {}
@@ -1235,12 +1255,18 @@ class HorizonOrchestrator:
                 for item_id, exclusion in editorial_result.exclusions.items()
             }
         )
+        exclusion_stages.update(
+            {
+                item_id: exclusion.reason
+                for item_id, exclusion in breakout_result.exclusions.items()
+            }
+        )
         if apply_balance:
             balanced_ids = {item.id for item in balanced_digest.items}
             exclusion_stages.update(
                 {
                     item.id: "digest_limit"
-                    for item in editorial_items
+                    for item in breakout_items
                     if item.id not in balanced_ids
                 }
             )
@@ -1250,7 +1276,7 @@ class HorizonOrchestrator:
             topic_dedup_count=len(deduped_items),
             topic_dedup_removed=topic_dedup_removed,
             balanced_digest=balanced_digest,
-            eligible_items=list(editorial_items),
+            eligible_items=list(breakout_items),
             exclusion_stages=exclusion_stages,
         )
 
@@ -1275,6 +1301,8 @@ class HorizonOrchestrator:
         )
         candidates = initial.items
         await self._expand_twitter_discussion(candidates)
+        breakout_selector = BreakoutSelector(self.config.digest)
+        breakout_selector.annotate(candidates)
 
         # Targeted re-analysis can lower a score, so reapply profile filters.
         eligible = [
@@ -1283,9 +1311,12 @@ class HorizonOrchestrator:
             if self.passes_profile_filter(item, threshold)
         ]
         eligible.sort(key=self._selection_sort_key, reverse=True)
-        balanced = self.apply_balanced_digest(eligible, log=log)
+        breakout_result = breakout_selector.select(eligible, annotate=False)
+        breakout_eligible = breakout_result.items
+        breakout_eligible.sort(key=self._selection_sort_key, reverse=True)
+        balanced = self.apply_balanced_digest(breakout_eligible, log=log)
         selected_ids = {item.id for item in balanced.items}
-        for item in eligible:
+        for item in breakout_eligible:
             self._update_candidate_trace(
                 item,
                 "balance",
@@ -1296,9 +1327,15 @@ class HorizonOrchestrator:
             item.id: getattr(self, "last_balance_exclusions", {}).get(
                 item.id, "digest_limit"
             )
-            for item in eligible
+            for item in breakout_eligible
             if item.id not in selected_ids
         }
+        exclusion_stages.update(
+            {
+                item_id: exclusion.reason
+                for item_id, exclusion in breakout_result.exclusions.items()
+            }
+        )
         exclusion_stages = {**initial.exclusion_stages, **exclusion_stages}
         return FilteringPipelineResult(
             items=balanced.items,
@@ -1306,8 +1343,8 @@ class HorizonOrchestrator:
             topic_dedup_count=initial.topic_dedup_count,
             topic_dedup_removed=initial.topic_dedup_removed,
             balanced_digest=balanced,
-            eligible_count=len(eligible),
-            eligible_items=eligible,
+            eligible_count=len(breakout_eligible),
+            eligible_items=breakout_eligible,
             exclusion_stages=exclusion_stages,
         )
 
@@ -1369,6 +1406,8 @@ class HorizonOrchestrator:
                     else {}
                 ),
             }
+            if profile_id in {*EDITORIAL_PROFILES, _PLATFORM_TREND_PROFILE_ID}:
+                row.update(self._breakout_diagnostic_fields(item))
             if profile_id in EDITORIAL_PROFILES:
                 row["url"] = str(item.url)
                 row["sub_source"] = self._sub_source_label(item)
@@ -1414,6 +1453,11 @@ class HorizonOrchestrator:
             trend_type = item.metadata.get("trend_type")
             if trend_type:
                 trend_types[str(trend_type)] += 1
+        breakout_status_counts: dict[str, int] = defaultdict(int)
+        for item in selected_items:
+            breakout_status_counts[
+                str(item.metadata.get("breakout_status") or "none")
+            ] += 1
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1422,6 +1466,18 @@ class HorizonOrchestrator:
             "rejected_count": len(rejected),
             "items": rejected,
             "selected_items": selected_rows,
+            "breakout_selection": {
+                "status_counts": dict(breakout_status_counts),
+                "breakout_count": breakout_status_counts.get("breakout", 0),
+                "hot_unverified_count": breakout_status_counts.get(
+                    "hot_unverified", 0
+                ),
+                "controversial_topic_limit_count": sum(
+                    1
+                    for row in rejected
+                    if row.get("stage") == "controversial_topic_limit"
+                ),
+            },
             "platform_trend_health": platform_health,
             "platform_trend_provider_counts": dict(platform_provider_counts),
             "platform_trend_platform_counts": dict(platform_counts),
@@ -1464,6 +1520,8 @@ class HorizonOrchestrator:
             "reason": reason,
             "analysis_reason": analysis.reason if analysis else None,
         }
+        if item_profile in {*EDITORIAL_PROFILES, _PLATFORM_TREND_PROFILE_ID}:
+            row.update(self._breakout_diagnostic_fields(item))
         if item_profile in EDITORIAL_PROFILES:
             row.update(self._editorial_diagnostic_fields(item, reason=reason))
         return row
@@ -1506,6 +1564,42 @@ class HorizonOrchestrator:
             "replaced_by_id": decision.get("replaced_by_id"),
             "limit_key": decision.get("limit_key"),
             "limit_value": decision.get("limit_value"),
+        }
+
+    @staticmethod
+    def _breakout_diagnostic_fields(item: ContentItem) -> dict:
+        analysis = item.processing.analysis if item.processing else None
+        decision = item.metadata.get("editorial_selection")
+        if not isinstance(decision, dict):
+            decision = {}
+        return {
+            "display_section": item.metadata.get("display_section"),
+            "canonical_theme": analysis.canonical_theme if analysis else None,
+            "source_signal_score": item.metadata.get("source_signal_score"),
+            "breakout_score": item.metadata.get("breakout_score"),
+            "breakout_status": item.metadata.get("breakout_status"),
+            "breakout_reason": (
+                analysis.breakout_reason
+                if analysis and analysis.breakout_reason
+                else item.metadata.get("breakout_reason")
+            ),
+            "breakout_eligibility_mode": item.metadata.get(
+                "breakout_eligibility_mode"
+            ),
+            "verification_status": item.metadata.get("verification_status"),
+            "duplicate_of_id": decision.get("replaced_by_id"),
+            "cross_section_duplicate": (
+                decision.get("reason") == "cross_section_duplicate"
+            ),
+            "semantic_theme_repeat": (
+                decision.get("reason") == "semantic_theme_repeat"
+            ),
+            "controversial_topic_limit": (
+                decision.get("reason") == "controversial_topic_limit"
+            ),
+            "below_breakout_threshold": (
+                item.metadata.get("breakout_status") == "none"
+            ),
         }
 
     @staticmethod
@@ -1615,10 +1709,9 @@ class HorizonOrchestrator:
         )
         if heat < heat_standard_threshold:
             return False, "below_heat_threshold"
-        if evidence < evidence_minimum:
-            return False, "evidence_insufficient"
         if (
             heat >= heat_standard_threshold
+            and evidence >= evidence_minimum
             and operations >= operations_standard_threshold
             and opportunity >= opportunity_standard_threshold
         ):
@@ -1629,6 +1722,8 @@ class HorizonOrchestrator:
             and opportunity >= high_heat_opportunity_threshold
         ):
             return True, "high_heat_relaxed_pass"
+        if evidence < evidence_minimum:
+            return False, "evidence_insufficient"
         if operations < operations_standard_threshold:
             return False, "operations_insufficient"
         return False, "extension_insufficient"
@@ -1755,6 +1850,20 @@ class HorizonOrchestrator:
             if analysis and analysis.score is not None
             else -1.0
         )
+        breakout_status = str(item.metadata.get("breakout_status") or "none")
+        breakout_rank = (
+            2.0
+            if breakout_status == "breakout"
+            else 1.0
+            if breakout_status == "hot_unverified"
+            else 0.0
+        )
+        breakout_score = item.metadata.get("breakout_score")
+        breakout_score = (
+            float(breakout_score)
+            if isinstance(breakout_score, (int, float))
+            else 0.0
+        )
         if profile_id == _PLATFORM_TREND_PROFILE_ID:
             final_score = item.metadata.get("trend_final_score")
             heat_score = item.metadata.get("heat_score")
@@ -1769,6 +1878,8 @@ class HorizonOrchestrator:
                 else -1.0
             )
             return (
+                breakout_rank,
+                breakout_score,
                 float(final_score if isinstance(final_score, (int, float)) else score),
                 float(extension_score if isinstance(extension_score, (int, float)) else -1.0),
                 float(evidence_score),
@@ -1781,6 +1892,8 @@ class HorizonOrchestrator:
             if published_at.tzinfo is None:
                 published_at = published_at.replace(tzinfo=timezone.utc)
             return (
+                breakout_rank,
+                breakout_score,
                 float(score),
                 float(
                     analysis.relevance_score
@@ -1801,6 +1914,8 @@ class HorizonOrchestrator:
                 item.id,
             )
         return (
+            breakout_rank,
+            breakout_score,
             float(score),
             cls._platform_source_priority(item),
             cls._platform_trend_heat_boost(item),

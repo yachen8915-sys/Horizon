@@ -123,7 +123,7 @@ def test_high_heat_item_that_meets_standard_gate_is_labeled_standard_pass(tmp_pa
     assert item.metadata["trend_eligibility_reason"] == "standard_pass"
 
 
-def test_high_heat_still_requires_minimum_evidence(tmp_path) -> None:
+def test_high_heat_low_evidence_topic_enters_relaxed_lane(tmp_path) -> None:
     orchestrator = _orchestrator(tmp_path)
     item = _trend_item("明星八卦标题", operations=5, opportunity=4, evidence=3)
     item.metadata["platform_occurrences"].append(
@@ -137,8 +137,8 @@ def test_high_heat_still_requires_minimum_evidence(tmp_path) -> None:
     item.metadata["cross_platform_count"] = 2
     orchestrator._prepare_platform_trend_selection([item])
 
-    assert orchestrator.passes_profile_filter(item) is False
-    assert item.metadata["trend_eligibility_reason"] == "evidence_insufficient"
+    assert orchestrator.passes_profile_filter(item) is True
+    assert item.metadata["trend_eligibility_reason"] == "high_heat_relaxed_pass"
 
 
 def test_platform_trend_state_classifies_new_and_rising_items(tmp_path) -> None:

@@ -100,6 +100,7 @@ class ContentAnalysis(BaseModel):
     change_status: Optional[str] = None
     primary_entity: Optional[str] = None
     topic_cluster: Optional[str] = None
+    canonical_theme: Optional[str] = None
     use_case: Optional[str] = None
     content_format: Optional[
         Literal[
@@ -142,6 +143,17 @@ class ContentAnalysis(BaseModel):
     evidence_quality_score: Optional[float] = Field(
         default=None, ge=0, le=10, allow_inf_nan=False
     )
+    audience_breadth_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    surprise_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    actionability_score: Optional[float] = Field(
+        default=None, ge=0, le=10, allow_inf_nan=False
+    )
+    breakout_reason: Optional[str] = None
+    controversial_topic: bool = False
     extension_score: Optional[float] = Field(
         default=None, ge=0, le=10, allow_inf_nan=False
     )
@@ -940,6 +952,7 @@ class DigestConfig(BaseModel):
     platform_trend_watch_limit: Optional[int] = Field(default=None, gt=0)
     platform_trend_minimum_per_platform: Optional[int] = Field(default=None, gt=0)
     platform_trend_max_per_platform: Optional[int] = Field(default=None, gt=0)
+    controversial_topic_limit: int = Field(default=3, ge=0)
     editorial_selection: EditorialSelectionConfig = Field(
         default_factory=EditorialSelectionConfig
     )

@@ -122,6 +122,7 @@ def test_github_runtime_config_uses_independent_radar_upper_bounds():
     assert config["digest"]["platform_trend_watch_limit"] == 4
     assert config["digest"]["platform_trend_minimum_per_platform"] == 1
     assert config["digest"]["platform_trend_max_per_platform"] == 2
+    assert config["digest"]["controversial_topic_limit"] == 3
     editorial = config["digest"]["editorial_selection"]
     assert editorial == {
         "enabled": True,

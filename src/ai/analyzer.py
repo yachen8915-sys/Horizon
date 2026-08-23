@@ -306,12 +306,14 @@ class ContentAnalyzer:
         elif require_editorial:
             primary_entity = normalize_editorial_token(result.primary_entity)
             topic_cluster = normalize_editorial_token(result.topic_cluster)
+            canonical_theme = normalize_editorial_token(result.canonical_theme)
             use_case = normalize_editorial_token(result.use_case)
             content_format = normalize_editorial_token(result.content_format)
             result = result.model_copy(
                 update={
                     "primary_entity": primary_entity,
                     "topic_cluster": topic_cluster,
+                    "canonical_theme": canonical_theme,
                     "use_case": use_case,
                     "event_key": normalize_editorial_token(result.event_key),
                     "editorial_key": (
@@ -345,6 +347,7 @@ class ContentAnalyzer:
             for field_name in (
                 "primary_entity",
                 "topic_cluster",
+                "canonical_theme",
                 "use_case",
                 "content_format",
                 "novelty_level",
@@ -357,6 +360,9 @@ class ContentAnalyzer:
                 "relevance_score",
                 "novelty_score",
                 "demonstrability_score",
+                "audience_breadth_score",
+                "surprise_score",
+                "actionability_score",
             ):
                 if getattr(result, field_name) is None:
                     return None, f"{field_name} is required by the editorial contract"

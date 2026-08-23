@@ -40,13 +40,13 @@
 普通娱乐、体育、明星和短期猎奇不是自动排除条件。程序会先根据榜单排名、热度百分位、跨平台出现和每日状态计算 `heat_score`，再执行两档准入：
 
 - 标准：`heat_score >= 7`、`operations_score >= 7`、`content_opportunity_score >= 6`、`evidence_quality_score >= 4`；
-- 高热度放宽：`heat_score >= 9`、`operations_score >= 5`、`content_opportunity_score >= 4`、`evidence_quality_score >= 4`。
+- 高热度放宽：`heat_score >= 9`、`operations_score >= 5`、`content_opportunity_score >= 4`；证据低于标准门槛时必须标为“热议·待核实”。
 
-高热度放宽只降低延展相关性门槛，不取消事实证据和品牌安全门槛。旁门延展分由 `content_opportunity_score`（50%）、`operations_score`（30%）和 `evidence_quality_score`（20%）计算，最多输出 3 个具体 `extension_angles`。
+高热度放宽只降低延展相关性门槛。证据低于标准爆点门槛、但来源信号极强的娱乐、体育、明星或猎奇话题可以作为“热议·待核实”线索出现；摘要只能描述正在热议什么，不能把爆料或推测写成已证实事实。程序会把这类内容在整份运营热点中限制为最多 3 条。旁门延展分由 `content_opportunity_score`（50%）、`operations_score`（30%）和 `evidence_quality_score`（20%）计算，最多输出 3 个具体 `extension_angles`。
 
 ## 直接排除边界
 
-只有极低热度、过时、无可信来源、政治敏感、灾难事故、逝者、严重社会事件、高品牌安全风险或纯低价值粉圈八卦才直接排除。普通娱乐文化热点不能因内容机会弱而被删除。
+只有极低热度、过时、政治敏感、灾难事故、逝者、严重社会事件或高品牌安全风险才直接排除。普通娱乐文化、明星热议和短期猎奇不能因题材本身被删除；证据不足时必须明确标记“待核实”，并受最多 3 条的程序限制。
 
 旁门不是金融投资账号。IPO、财报或公司新闻可以作为运营情报或内容素材，但不得生成投资建议、申购策略、股票分析或估值建议。
 

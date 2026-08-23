@@ -231,6 +231,7 @@ def test_ai_editorial_profiles_require_body_backed_structured_labels(profile_id)
     for field in (
         "primary_entity",
         "topic_cluster",
+        "canonical_theme",
         "use_case",
         "content_format",
         "novelty_level",
@@ -239,6 +240,10 @@ def test_ai_editorial_profiles_require_body_backed_structured_labels(profile_id)
         "relevance_score",
         "novelty_score",
         "demonstrability_score",
+        "audience_breadth_score",
+        "surprise_score",
+        "actionability_score",
+        "breakout_reason",
     ):
         assert f'"{field}"' in prompt
     assert "body evidence" in prompt
@@ -275,6 +280,7 @@ def test_topic_radar_repairs_missing_editorial_fields_and_normalizes_keys():
                     "tags": ["Gemini", "SAT"],
                     "primary_entity": "Gemini",
                     "topic_cluster": "AI Education",
+                    "canonical_theme": "AI Learning Assistant",
                     "use_case": "SAT Practice",
                     "content_format": "feature_update",
                     "novelty_level": "material_update",
@@ -283,6 +289,10 @@ def test_topic_radar_repairs_missing_editorial_fields_and_normalizes_keys():
                     "relevance_score": 9,
                     "novelty_score": 8,
                     "demonstrability_score": 9,
+                    "audience_breadth_score": 8,
+                    "surprise_score": 7,
+                    "actionability_score": 9,
+                    "breakout_reason": "Students can use the feature immediately.",
                 }
             ),
         ]
@@ -309,6 +319,7 @@ def test_topic_radar_repairs_missing_editorial_fields_and_normalizes_keys():
     analysis = item.processing.analysis
     assert analysis.primary_entity == "gemini"
     assert analysis.topic_cluster == "ai_education"
+    assert analysis.canonical_theme == "ai_learning_assistant"
     assert analysis.use_case == "sat_practice"
     assert analysis.event_key == "gemini_sat_practice_tests_launch"
     assert analysis.editorial_key == "gemini|sat_practice|feature_update"

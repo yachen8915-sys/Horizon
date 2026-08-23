@@ -62,6 +62,18 @@ def canonical_semantic_key(item: ContentItem) -> str:
     return "|".join(parts) if all(parts) else ""
 
 
+def canonical_theme_key(item: ContentItem) -> str:
+    """Group equivalent user tasks without treating distinct events as duplicates."""
+    analysis = item.processing.analysis if item.processing else None
+    if analysis is None:
+        return ""
+    parts = (
+        normalize_editorial_token(analysis.canonical_theme),
+        normalize_editorial_token(analysis.use_case),
+    )
+    return "|".join(parts) if all(parts) else ""
+
+
 def canonical_url(value: str) -> str:
     parsed = urlsplit(value)
     query = [
@@ -157,7 +169,9 @@ class EditorialSelector:
             use_case = normalize_editorial_token(analysis.use_case)
             content_format = normalize_editorial_token(analysis.content_format)
             source = sub_source_key(item)
-            semantic = canonical_semantic_key(item)
+            semantic = canonical_theme_key(item) or canonical_semantic_key(item)
+            has_canonical_theme = bool(canonical_theme_key(item))
+            novelty_level = normalize_editorial_token(analysis.novelty_level)
 
             if item_profile == TOPIC_PROFILE:
                 limits = (
@@ -171,7 +185,16 @@ class EditorialSelector:
                         "diversity_format_limit",
                     ),
                     ("sub_source", source, self.config.sub_source_limit, "diversity_source_limit"),
-                    ("semantic", semantic, self.config.same_day_semantic_limit, "diversity_semantic_limit"),
+                    (
+                        "semantic",
+                        semantic,
+                        self.config.same_day_semantic_limit
+                        if novelty_level not in EDITORIAL_COOLDOWN_BYPASS
+                        else None,
+                        "semantic_theme_repeat"
+                        if has_canonical_theme
+                        else "diversity_semantic_limit",
+                    ),
                 )
                 rejected = False
                 counters = {
@@ -247,6 +270,10 @@ class EditorialSelector:
                     "event_key": normalize_editorial_token(analysis.event_key),
                     "editorial_key": canonical_editorial_key(item),
                     "semantic_key": canonical_semantic_key(item),
+                    "canonical_theme": normalize_editorial_token(
+                        analysis.canonical_theme
+                    ),
+                    "theme_key": canonical_theme_key(item),
                     "primary_entity": normalize_editorial_token(analysis.primary_entity),
                     "topic_cluster": normalize_editorial_token(analysis.topic_cluster),
                     "use_case": normalize_editorial_token(analysis.use_case),
@@ -277,6 +304,7 @@ class EditorialSelector:
         event_key = normalize_editorial_token(analysis.event_key)
         editorial_key = canonical_editorial_key(item)
         semantic_key = canonical_semantic_key(item)
+        theme_key = canonical_theme_key(item)
         novelty_level = normalize_editorial_token(analysis.novelty_level)
         history_cutoff = now - timedelta(days=self.config.history_days)
         editorial_cutoff = now - timedelta(days=self.config.editorial_cooldown_days)
@@ -305,16 +333,25 @@ class EditorialSelector:
                     limit_key="event_key:7d",
                     limit_value=self.config.history_days,
                 )
+            record_theme_key = normalize_editorial_token(record.get("theme_key"))
+            record_semantic_key = str(record.get("semantic_key") or "")
+            current_cooldown_keys = {
+                key for key in (theme_key, semantic_key) if key
+            }
+            recorded_cooldown_keys = {
+                key for key in (record_theme_key, record_semantic_key) if key
+            }
             if (
                 selected_at >= semantic_cutoff
-                and semantic_key
-                and record.get("semantic_key") == semantic_key
+                and current_cooldown_keys.intersection(recorded_cooldown_keys)
                 and novelty_level not in EDITORIAL_COOLDOWN_BYPASS
             ):
                 return EditorialExclusion(
                     reason="cross_day_semantic_cooldown",
                     replaced_by_id=replaced_by_id,
-                    limit_key="semantic_key:3d",
+                    limit_key=(
+                        "canonical_theme:3d" if theme_key else "semantic_key:3d"
+                    ),
                     limit_value=self.config.semantic_cooldown_days,
                 )
             if (

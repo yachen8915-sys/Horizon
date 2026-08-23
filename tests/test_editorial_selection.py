@@ -26,6 +26,7 @@ def make_editorial_item(
     demonstrability: float = 8.0,
     entity: str,
     topic: str,
+    canonical_theme: str | None = None,
     use_case: str,
     content_format: str,
     novelty_level: str = "new_example",
@@ -56,6 +57,7 @@ def make_editorial_item(
                 summary=f"Summary for {item_id}",
                 primary_entity=entity,
                 topic_cluster=topic,
+                canonical_theme=canonical_theme,
                 use_case=use_case,
                 content_format=content_format,
                 novelty_level=novelty_level,
@@ -219,6 +221,68 @@ def test_cross_day_topic_and_use_case_semantic_cooldown(tmp_path):
 
     assert result.exclusions["repackaged-workflow"].reason == (
         "cross_day_semantic_cooldown"
+    )
+
+
+def test_v1_state_without_theme_falls_back_to_legacy_semantic_key(tmp_path):
+    selector = make_selector(tmp_path)
+    selector.state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "items": [
+                    {
+                        "item_id": "legacy-workflow",
+                        "url": "https://example.com/legacy-workflow",
+                        "event_key": "legacy_event",
+                        "editorial_key": "tool_a|video_workflow|tutorial_workflow",
+                        "semantic_key": "ai_video_creation|video_workflow",
+                        "selected_at": "2026-08-18T00:00:00+00:00",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    repackaged = make_editorial_item(
+        "new-themed-workflow",
+        entity="tool-b",
+        topic="ai_video_creation",
+        canonical_theme="ai_narrative_video_workflow",
+        use_case="video_workflow",
+        content_format="tutorial_workflow",
+        novelty_level="evergreen_repackage",
+    )
+
+    result = selector.select(
+        [repackaged], now=datetime(2026, 8, 20, tzinfo=timezone.utc)
+    )
+
+    assert result.items == []
+    assert result.exclusions[repackaged.id].reason == "cross_day_semantic_cooldown"
+
+
+def test_record_selected_keeps_v1_and_adds_optional_theme_identity(tmp_path):
+    selector = make_selector(tmp_path)
+    item = make_editorial_item(
+        "themed-workflow",
+        entity="tool-a",
+        topic="ai_video_creation",
+        canonical_theme="ai_narrative_video_workflow",
+        use_case="video_workflow",
+        content_format="tutorial_workflow",
+    )
+
+    selector.record_selected(
+        [item], now=datetime(2026, 8, 20, tzinfo=timezone.utc)
+    )
+
+    state = json.loads(selector.state_path.read_text(encoding="utf-8"))
+    assert state["version"] == 1
+    assert state["items"][0]["canonical_theme"] == "ai_narrative_video_workflow"
+    assert state["items"][0]["theme_key"] == (
+        "ai_narrative_video_workflow|video_workflow"
     )
 
 
