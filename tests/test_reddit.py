@@ -240,6 +240,38 @@ def test_reddit_listing_old_failure_falls_back_to_json_then_rss():
     assert items[0].profile == "rss-profile"
 
 
+def test_reddit_all_listing_transports_failed_is_reported() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="unavailable")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    scraper = RedditScraper(_make_config(fetch_comments=0), client)
+
+    items = asyncio.run(
+        scraper.fetch(datetime.now(timezone.utc) - timedelta(hours=1))
+    )
+    asyncio.run(client.aclose())
+
+    assert items == []
+    assert scraper.last_source_results[0]["status"] == "failed"
+    assert scraper.last_source_results[0]["reason_code"] == "transport_error"
+
+
+def test_reddit_shadow_source_requires_shadow_mode() -> None:
+    from types import SimpleNamespace
+
+    from src.orchestrator import HorizonOrchestrator
+
+    orchestrator = object.__new__(HorizonOrchestrator)
+    orchestrator.config = SimpleNamespace(
+        collection=SimpleNamespace(source_shadow_enabled=False),
+        sources=SimpleNamespace(reddit=RedditConfig(enabled=True, shadow=True)),
+    )
+
+    assert orchestrator._reddit_source_enabled() is False
+
+
 def test_reddit_user_profile_propagates() -> None:
     config = RedditConfig(
         enabled=True,

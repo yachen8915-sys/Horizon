@@ -221,6 +221,31 @@ def test_analysis_prompt_combines_common_rules_and_profile_policy():
     assert "# Output contract" in prompt
 
 
+def test_intelligence_mode_adds_decision_and_evidence_contract() -> None:
+    prompt = analysis_system_prompt(
+        PROFILES.get("pangmen-topic-radar"), include_intelligence=True
+    )
+
+    assert '"intelligence"' in prompt
+    assert '"primary_lane"' in prompt
+    assert '"decision_summary"' in prompt
+    assert '"evidence_status"' in prompt
+    assert '"propagation_quality"' in prompt
+
+
+def test_intelligence_mode_rejects_legacy_only_response() -> None:
+    response = json.dumps(
+        {"score": 8, "reason": "useful", "summary": "summary", "tags": []}
+    )
+
+    result, failure = ContentAnalyzer._validate_analysis_response(
+        response, require_intelligence=True
+    )
+
+    assert result is None
+    assert failure == "intelligence is required by the redesigned contract"
+
+
 @pytest.mark.parametrize(
     "profile_id",
     ["pangmen-topic-radar", "pangmen-ai-tech-radar"],

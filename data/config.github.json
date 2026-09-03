@@ -48,7 +48,66 @@
     }
   },
   "sources": {
-    "github": [],
+    "github": [
+      {
+        "type": "repo_search",
+        "query": "topic:artificial-intelligence",
+          "fetch_limit": 20,
+          "min_stars": 50,
+          "discovery_window_days": 30,
+        "shadow": true,
+        "enabled": true,
+        "category": "new-ai-project",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "type": "repo_search",
+        "query": "topic:generative-ai",
+          "fetch_limit": 20,
+          "min_stars": 50,
+          "discovery_window_days": 30,
+        "shadow": true,
+        "enabled": true,
+        "category": "new-ai-project",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "openai",
+        "repo": "openai-agents-python",
+        "shadow": true,
+        "enabled": true,
+        "category": "official-ai-agent",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "modelcontextprotocol",
+        "repo": "python-sdk",
+        "shadow": true,
+        "enabled": true,
+        "category": "official-ai-protocol",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "browser-use",
+        "repo": "browser-use",
+        "shadow": true,
+        "enabled": true,
+        "category": "ai-agent",
+        "profile": "pangmen-ai-tech-radar"
+      },
+      {
+        "type": "repo_releases",
+        "owner": "Comfy-Org",
+        "repo": "ComfyUI",
+        "shadow": true,
+        "enabled": true,
+        "category": "ai-creative-tool",
+        "profile": "pangmen-ai-tech-radar"
+      }
+    ],
     "hackernews": {
       "enabled": true,
       "fetch_top_stories": 50,
@@ -177,30 +236,57 @@
         "profile": "pangmen-topic-radar"
       },
       {
+        "name": "TechCrunch Artificial Intelligence",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
+        "category": "overseas-ai-media",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "The Verge AI",
+        "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
+        "category": "overseas-ai-media",
+        "profile": "pangmen-topic-radar"
+      },
+      {
+        "name": "MIT Technology Review AI",
+        "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 48,
+        "category": "overseas-ai-media",
+        "profile": "pangmen-topic-radar"
+      },
+      {
         "name": "YouTube - Matt Wolfe",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChpleBmo18P08aKCIgti38g",
-        "enabled": true,
+        "enabled": false,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
       {
         "name": "YouTube - Jeff Su",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwAnu01qlnVg1Ai2AbtTMaA",
-        "enabled": true,
+        "enabled": false,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
       {
         "name": "YouTube - Andrej Karpathy",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
-        "enabled": true,
+        "enabled": false,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
       {
         "name": "YouTube - AI Explained",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNJ1Ymd5yFuUPtn21xtRbbw",
-        "enabled": true,
+        "enabled": false,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
@@ -241,23 +327,177 @@
       }
     ],
     "reddit": {
-      "enabled": false,
-      "subreddits": [],
+      "enabled": true,
+      "shadow": true,
+      "subreddits": [
+        {
+          "subreddit": "LocalLLaMA",
+          "sort": "top",
+          "time_filter": "day",
+          "fetch_limit": 20,
+          "min_score": 50,
+          "category": "ai-community",
+          "profile": "pangmen-ai-tech-radar"
+        },
+        {
+          "subreddit": "artificial",
+          "sort": "top",
+          "time_filter": "day",
+          "fetch_limit": 20,
+          "min_score": 50,
+          "category": "ai-community",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "subreddit": "MachineLearning",
+          "sort": "top",
+          "time_filter": "day",
+          "fetch_limit": 20,
+          "min_score": 25,
+          "category": "ai-research-community",
+          "profile": "pangmen-ai-tech-radar"
+        },
+        {
+          "subreddit": "ChatGPT",
+          "sort": "top",
+          "time_filter": "day",
+          "fetch_limit": 20,
+          "min_score": 100,
+          "category": "ai-user-demand",
+          "profile": "pangmen-topic-radar"
+        }
+      ],
       "users": [],
-      "fetch_comments": 0
+      "fetch_comments": 3
     },
     "twitter": {
-      "enabled": false,
+      "enabled": true,
+      "mode": "official_api",
+      "shadow": true,
       "users": [
+        "OpenAI",
+        "AnthropicAI",
+        "GoogleDeepMind",
+        "GoogleAI",
+        "MetaAI",
+        "xai",
+        "MicrosoftAI",
+        "github",
+        "figma",
+        "NotionHQ",
+        "canva",
+        "runwayml",
+        "perplexity_ai",
+        "cursor_ai",
         "karpathy",
-        "ylecun"
+        "simonw",
+        "swyx",
+        "emollick",
+        "nathan_lambert"
       ],
       "fetch_limit": 10,
       "fetch_reply_text": false,
       "max_replies_per_tweet": 3,
       "max_tweets_to_expand": 10,
       "reply_min_likes": 5,
+      "official_bearer_token_env": "X_BEARER_TOKEN",
+      "official_max_requests_per_run": 3,
+      "local_cli_fallback_enabled": true,
+      "local_cli_command": "opencli",
+      "local_cli_timeout_sec": 45,
+      "official_queries": [
+        "(AI OR artificial intelligence) (tool OR agent OR workflow) -is:retweet lang:en",
+        "(OpenAI OR Anthropic OR Gemini OR Claude) -is:retweet lang:en"
+      ],
       "profile": "tech-news"
+    },
+    "youtube": {
+      "enabled": true,
+      "shadow": true,
+      "api_key_env": "YOUTUBE_DATA_API_KEY",
+      "relevance_language": "en",
+      "region_code": "US",
+      "max_units_per_run": 25,
+      "local_cli_fallback_enabled": true,
+      "local_cli_command": "yt-dlp",
+      "local_cli_timeout_sec": 90,
+      "local_cli_concurrency": 2,
+      "channels": [
+        {
+          "channel_id": "UChpleBmo18P08aKCIgti38g",
+          "name": "Matt Wolfe",
+          "fetch_limit": 5,
+          "category": "overseas-ai-video",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "channel_id": "UCwAnu01qlnVg1Ai2AbtTMaA",
+          "name": "Jeff Su",
+          "fetch_limit": 5,
+          "category": "overseas-ai-video",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "channel_id": "UCXUPKJO5MZQN11PqgIvyuvQ",
+          "name": "Andrej Karpathy",
+          "fetch_limit": 5,
+          "category": "overseas-ai-video",
+          "profile": "pangmen-ai-tech-radar"
+        },
+        {
+          "channel_id": "UCNJ1Ymd5yFuUPtn21xtRbbw",
+          "name": "AI Explained",
+          "fetch_limit": 5,
+          "category": "overseas-ai-video",
+          "profile": "pangmen-topic-radar"
+        }
+      ],
+      "queries": [
+        {
+          "query": "AI tools OR AI agents",
+          "fetch_limit": 10,
+          "order": "viewCount",
+          "category": "overseas-ai-video",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "query": "generative AI workflow",
+          "fetch_limit": 10,
+          "order": "viewCount",
+          "category": "overseas-ai-video",
+          "profile": "pangmen-topic-radar"
+        }
+      ]
+    },
+    "bluesky": {
+      "enabled": true,
+      "shadow": true,
+      "public_api_base_url": "https://public.api.bsky.app",
+      "actors": [
+        "simonwillison.net",
+        "swyx.io",
+        "emollick.bsky.social",
+        "karpathy.bsky.social",
+        "replicate.com"
+      ],
+      "actor_fetch_limit": 10,
+      "max_requests_per_run": 5,
+      "category": "overseas-ai-community",
+      "profile": "pangmen-topic-radar",
+      "queries": [
+        {
+          "query": "AI agent",
+          "enabled": false,
+          "fetch_limit": 25,
+          "sort": "top"
+        },
+        {
+          "query": "AI tools",
+          "enabled": false,
+          "fetch_limit": 25,
+          "sort": "latest"
+        }
+      ]
     },
     "openbb": {
       "enabled": false,
@@ -640,9 +880,128 @@
     },
     "platform_changes": {
       "enabled": true,
+      "shadow": true,
       "lookback_days": 7,
       "state_file": "data/platform_change_state.json",
+      "shadow_state_file": "data/shadow/platform_change_state.json",
       "watchers": [
+        {
+          "name": "anthropic-official-news",
+          "mode": "index",
+          "platform": "anthropic",
+          "url": "https://www.anthropic.com/news",
+          "fallback_query": "site:anthropic.com/news (Claude OR Anthropic) (launch OR update OR release)",
+          "include_patterns": ["/news/"],
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["anthropic.com"],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "meta-ai-official-blog",
+          "mode": "index",
+          "platform": "meta-ai",
+          "url": "https://ai.meta.com/blog/",
+          "fallback_query": "site:ai.meta.com/blog (Meta AI OR Llama) (launch OR update OR release)",
+          "include_patterns": ["/blog/"],
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["ai.meta.com"],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "xai-official-news",
+          "mode": "index",
+          "platform": "xai",
+          "url": "https://x.ai/news",
+          "fallback_query": "site:x.ai/news (Grok OR xAI) (launch OR update OR release)",
+          "include_patterns": ["/news/"],
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["x.ai"],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "canva-product-news",
+          "mode": "index",
+          "platform": "canva",
+          "url": "https://www.canva.com/newsroom/news/?category=product",
+          "fallback_query": "site:canva.com/newsroom/news (Canva AI OR Magic Studio) (launch OR update OR release)",
+          "include_patterns": ["/newsroom/news/"],
+          "exclude_patterns": ["category=product"],
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["canva.com"],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "runway-product-news",
+          "mode": "index",
+          "platform": "runway",
+          "url": "https://runway.com/news",
+          "fallback_query": "site:runway.com/news (Runway OR Gen) (launch OR update OR release)",
+          "include_patterns": ["/news/", "/changelog"],
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["runway.com"],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "perplexity-changelog",
+          "mode": "page_diff",
+          "platform": "perplexity",
+          "url": "https://www.perplexity.ai/changelog",
+          "fallback_query": "site:perplexity.ai/changelog Perplexity update",
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["perplexity.ai"],
+          "min_content_chars": 500,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "cursor-changelog",
+          "mode": "page_diff",
+          "platform": "cursor",
+          "url": "https://cursor.com/changelog",
+          "fallback_query": "site:cursor.com/changelog Cursor update",
+          "change_types": ["feature"],
+          "source_level": "official",
+          "official_domains": ["cursor.com"],
+          "min_content_chars": 500,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
+        {
+          "name": "mistral-official-news",
+          "mode": "index",
+          "platform": "mistral",
+          "url": "https://mistral.ai/news/",
+          "fallback_query": "site:mistral.ai/news (Mistral OR Le Chat) (launch OR update OR release)",
+          "include_patterns": [
+            "/news/"
+          ],
+          "change_types": [
+            "feature"
+          ],
+          "source_level": "official",
+          "official_domains": [
+            "mistral.ai"
+          ],
+          "fetch_limit": 30,
+          "category": "official-ai-product",
+          "profile": "pangmen-topic-radar"
+        },
         {
           "name": "douyin-open-platform-operation-standard",
           "mode": "page_diff",
@@ -739,9 +1098,68 @@
   },
   "collection": {
     "time_window_hours": 24,
+    "source_registry_file": "data/source_registry.json",
+    "core_entity_registry_file": "data/core_entities.json",
+    "source_health_state_file": "data/shadow/source_health_state.json",
+    "source_shadow_enabled": false,
+    "social_engagement_quality": {
+      "enabled": true,
+      "platforms": {
+        "bilibili": {
+          "maturity_hours": 6,
+          "primary_metric": "views",
+          "minimum_sample": 200,
+          "relative_quantile": 0.75,
+          "relative_ratio": 0.35,
+          "minimum_quality_score": 4,
+          "required_metrics": ["views", "likes", "comments", "favorites", "shares", "coins", "danmaku"],
+          "minimum_complete_fields": 5
+        },
+        "youtube": {
+          "maturity_hours": 12,
+          "primary_metric": "views",
+          "minimum_sample": 1000,
+          "relative_quantile": 0.75,
+          "relative_ratio": 0.35,
+          "minimum_quality_score": 4,
+          "required_metrics": ["views", "likes", "comments"],
+          "minimum_complete_fields": 3
+        },
+        "twitter": {
+          "maturity_hours": 3,
+          "primary_metric": "impressions",
+          "minimum_sample": 5000,
+          "relative_quantile": 0.75,
+          "relative_ratio": 0.35,
+          "minimum_quality_score": 4,
+          "required_metrics": ["impressions", "likes", "reposts", "replies", "quotes"],
+          "minimum_complete_fields": 4
+        },
+        "twitter_opencli": {
+          "maturity_hours": 3,
+          "primary_metric": "impressions",
+          "minimum_sample": 5000,
+          "relative_quantile": 0.75,
+          "relative_ratio": 0.35,
+          "minimum_quality_score": 4,
+          "required_metrics": ["impressions", "likes"],
+          "minimum_complete_fields": 2
+        },
+        "bluesky": {
+          "maturity_hours": 3,
+          "primary_metric": "likes",
+          "minimum_sample": 50,
+          "relative_quantile": 0.75,
+          "relative_ratio": 0.35,
+          "minimum_quality_score": 4,
+          "required_metrics": ["likes", "reposts", "replies", "quotes"],
+          "minimum_complete_fields": 4
+        }
+      }
+    },
     "engagement_tracking": {
       "enabled": true,
-      "refresh_after_hours": 24,
+      "refresh_after_hours": 3,
       "lookback_hours": 48,
       "state_filename": "engagement_snapshots.json",
       "thresholds": {
@@ -775,6 +1193,20 @@
         }
       }
     }
+  },
+  "intelligence": {
+    "enabled": true,
+    "delivery_enabled": false,
+    "run_mode": "shadow",
+    "decision_lanes": [
+      "product_capability",
+      "hot_content",
+      "technical_frontier",
+      "platform_ai_change"
+    ],
+    "candidate_store_file": "data/candidates/candidate_ledger.jsonl",
+    "delivery_store_file": "data/candidates/delivery_ledger.jsonl",
+    "rule_version": "2026-09-03-v1"
   },
   "digest": {
     "max_items": 25,

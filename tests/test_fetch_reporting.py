@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from rich.console import Console
 
-from src.models import ContentItem, SourceType
+from src.models import ContentItem, RSSSourceConfig, SourceType
 from src.orchestrator import FetchReport, HorizonOrchestrator, SourceFetchOutcome
 
 
@@ -35,6 +35,25 @@ def make_orchestrator() -> HorizonOrchestrator:
     return orchestrator
 
 
+def test_shadow_rss_feeds_are_only_enabled_in_source_shadow_mode() -> None:
+    orchestrator = make_orchestrator()
+    active = RSSSourceConfig(name="Active", url="https://example.com/active.xml")
+    shadow = RSSSourceConfig(
+        name="Shadow",
+        url="https://example.com/shadow.xml",
+        shadow=True,
+    )
+    orchestrator.config = SimpleNamespace(  # type: ignore[assignment]
+        collection=SimpleNamespace(source_shadow_enabled=False),
+        sources=SimpleNamespace(rss=[active, shadow]),
+    )
+
+    assert orchestrator._enabled_rss_sources() == [active]
+
+    orchestrator.config.collection.source_shadow_enabled = True
+    assert orchestrator._enabled_rss_sources() == [active, shadow]
+
+
 def make_sources(**overrides):  # type: ignore[no-untyped-def]
     values = {
         "github": [],
@@ -55,6 +74,101 @@ def make_sources(**overrides):  # type: ignore[no-untyped-def]
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_fetch_report_includes_source_coverage_gate() -> None:
+    report = FetchReport(
+        outcomes=[SourceFetchOutcome("RSS Feeds", "empty")],
+        source_coverage={
+            "ready": False,
+            "gaps": [{"decision_lane": "technical_frontier"}],
+        },
+    )
+
+    payload = report.to_dict()
+
+    assert payload["source_coverage"]["ready"] is False
+    assert payload["source_coverage"]["gaps"][0]["decision_lane"] == (
+        "technical_frontier"
+    )
+
+
+def test_all_provider_business_failures_make_source_fetch_fail() -> None:
+    orchestrator = make_orchestrator()
+    scraper = StubScraper([])
+    scraper.last_provider_results = [
+        {
+            "source_id": "platform-trends:weibo:dailyhot",
+            "status": "failed",
+            "reason_code": "business_error",
+            "detail": "500: 获取失败",
+        }
+    ]
+
+    outcome = asyncio.run(
+        orchestrator._fetch_with_progress("Platform Trends", scraper, SINCE)
+    )
+
+    assert outcome.status == "failure"
+    assert outcome.error == "all configured providers failed"
+    assert outcome.to_dict()["providers"][0]["reason_code"] == "business_error"
+
+
+def test_one_healthy_provider_keeps_source_fetch_success() -> None:
+    orchestrator = make_orchestrator()
+    scraper = StubScraper([make_item("trend")])
+    scraper.last_provider_results = [
+        {"source_id": "weibo", "status": "failed", "reason_code": "business_error"},
+        {"source_id": "douyin", "status": "healthy", "reason_code": "healthy"},
+    ]
+
+    outcome = asyncio.run(
+        orchestrator._fetch_with_progress("Platform Trends", scraper, SINCE)
+    )
+
+    assert outcome.status == "success"
+    assert len(outcome.provider_health) == 2
+
+
+def test_all_rss_feed_failures_make_aggregate_source_fail() -> None:
+    orchestrator = make_orchestrator()
+    scraper = StubScraper([])
+    scraper.last_feed_results = [
+        {
+            "source_id": "rss:one",
+            "status": "failed",
+            "reason_code": "transport_error",
+        },
+        {
+            "source_id": "rss:two",
+            "status": "failed",
+            "reason_code": "schema_error",
+        },
+    ]
+
+    outcome = asyncio.run(orchestrator._fetch_with_progress("RSS Feeds", scraper, SINCE))
+
+    assert outcome.status == "failure"
+    assert outcome.error == "all configured feeds failed"
+    assert len(outcome.to_dict()["feeds"]) == 2
+
+
+def test_all_github_sub_source_failures_make_aggregate_source_fail() -> None:
+    orchestrator = make_orchestrator()
+    scraper = StubScraper([])
+    scraper.last_source_results = [
+        {
+            "source_id": "github:repo_releases:missing/repo",
+            "status": "failed",
+            "reason_code": "transport_error",
+        }
+    ]
+
+    outcome = asyncio.run(orchestrator._fetch_with_progress("GitHub", scraper, SINCE))
+
+    assert outcome.status == "failure"
+    assert outcome.error == "all configured sub-sources failed"
+    assert outcome.to_dict()["source_health"][0]["reason_code"] == "transport_error"
 
 
 def test_bilibili_source_is_wired_into_fetch_reporting(monkeypatch) -> None:

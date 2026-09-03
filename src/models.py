@@ -32,6 +32,8 @@ class SourceType(str, Enum):
     HUGGINGFACE = "huggingface"
     PLATFORM_TRENDS = "platform_trends"
     PLATFORM_CHANGES = "platform_changes"
+    YOUTUBE = "youtube"
+    BLUESKY = "bluesky"
 
 
 class SourceDefinition(NamedTuple):
@@ -62,9 +64,117 @@ SOURCE_REGISTRY = {
     SourceType.PLATFORM_CHANGES.value: SourceDefinition(
         "platform_changes", item_fields=("watchers",)
     ),
+    SourceType.YOUTUBE.value: SourceDefinition("youtube", item_fields=("queries",)),
+    SourceType.BLUESKY.value: SourceDefinition(
+        "bluesky", item_fields=("actors", "queries")
+    ),
 }
 
 ProfileRoute = Optional[Union[str, List[str]]]
+
+
+class DecisionLane(str, Enum):
+    PRODUCT_CAPABILITY = "product_capability"
+    HOT_CONTENT = "hot_content"
+    TECHNICAL_FRONTIER = "technical_frontier"
+    PLATFORM_AI_CHANGE = "platform_ai_change"
+
+
+class CandidateStatus(str, Enum):
+    DISCOVERED = "discovered"
+    ENRICHED = "enriched"
+    OBSERVING = "observing"
+    ELIGIBLE = "eligible"
+    SELECTED = "selected"
+    HELD = "held"
+    MERGED = "merged"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    PROCESSING_ERROR = "processing_error"
+
+
+class EvidenceStatus(str, Enum):
+    CONFIRMED = "confirmed"
+    CORROBORATED = "corroborated"
+    REPORTED = "reported"
+    UNVERIFIED = "unverified"
+    DISPUTED = "disputed"
+
+
+class ReasonCode(str, Enum):
+    PASSED_HARD_GATES = "passed_hard_gates"
+    IMMATURE = "immature"
+    LOW_PROPAGATION = "low_propagation"
+    INCOMPLETE_ENGAGEMENT = "incomplete_engagement"
+    LOW_RELEVANCE = "low_relevance"
+    LOW_QUALITY = "low_quality"
+    EVIDENCE_INSUFFICIENT = "evidence_insufficient"
+    DUPLICATE = "duplicate"
+    MERGED_INTO_STRONGER_EVIDENCE = "merged_into_stronger_evidence"
+    HELD_BY_CAPACITY = "held_by_capacity"
+    HELD_BY_DIVERSITY = "held_by_diversity"
+    HELD_BY_EVIDENCE_LIMIT = "held_by_evidence_limit"
+    SELECTED = "selected"
+    EXPIRED = "expired"
+    ANALYSIS_FAILED = "analysis_failed"
+    PROCESSING_ERROR = "processing_error"
+
+
+class RadarRunMode(str, Enum):
+    SHADOW = "shadow"
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+
+
+class CandidateScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_impact: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    audience_fit: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    novelty: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    evidence_quality: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    demonstrability: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    propagation_quality: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    freshness: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    differentiation: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+    total: float = Field(default=0, ge=0, le=10, allow_inf_nan=False)
+
+
+class EvidenceReference(BaseModel):
+    source_item_id: str
+    url: HttpUrl
+    authority: str
+    independent_group: str
+    excerpt: str | None = None
+    stance: Literal["supports", "contradicts"] = "supports"
+
+
+class AtomicClaim(BaseModel):
+    text: str
+    status: EvidenceStatus
+    evidence_refs: List[str] = Field(default_factory=list)
+
+
+class IntelligenceAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_lane: DecisionLane
+    content_kind: str = "other"
+    novelty_basis: Literal[
+        "new_event",
+        "new_release",
+        "new_data",
+        "new_angle",
+        "ongoing_update",
+        "none",
+    ] = "none"
+    direct_impacts: List[str] = Field(default_factory=list)
+    decision_summary: str
+    content_summary: str
+    evidence_status: EvidenceStatus
+    claims: List[AtomicClaim] = Field(default_factory=list)
+    evidence_refs: List[EvidenceReference] = Field(default_factory=list)
+    score: CandidateScore = Field(default_factory=CandidateScore)
 
 
 class ClassificationResult(BaseModel):
@@ -145,6 +255,7 @@ class ContentAnalysis(BaseModel):
     reason: str
     summary: str
     tags: List[str] = Field(default_factory=list)
+    intelligence: Optional[IntelligenceAnalysis] = None
 
 
 class ArtifactSource(BaseModel):
@@ -199,6 +310,51 @@ class ContentItem(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     profile: ProfileRoute = None
     processing: Optional[ProcessingResult] = None
+
+
+class CandidateStatusTransition(BaseModel):
+    from_status: CandidateStatus | None = None
+    to_status: CandidateStatus
+    changed_at: datetime
+    reason_code: ReasonCode | None = None
+    detail: str | None = None
+
+
+class CandidateRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    item: ContentItem
+    status: CandidateStatus = CandidateStatus.DISCOVERED
+    discovered_at: datetime
+    updated_at: datetime
+    canonical_url: str | None = None
+    source_item_id: str | None = None
+    event_key: str | None = None
+    event_version: int = Field(default=1, ge=1)
+    event_version_at: datetime | None = None
+    editorial_topic_key: str | None = None
+    evidence_status: EvidenceStatus = EvidenceStatus.UNVERIFIED
+    intelligence: IntelligenceAnalysis | None = None
+    evidence_refs: List[EvidenceReference] = Field(default_factory=list)
+    merged_into: str | None = None
+    reason_codes: List[ReasonCode] = Field(default_factory=list)
+    status_history: List[CandidateStatusTransition] = Field(default_factory=list)
+    rule_version: str
+
+
+class DeliveryRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delivery_id: str
+    run_id: str
+    run_mode: RadarRunMode
+    delivered_at: datetime
+    candidate_id: str
+    event_key: str
+    event_version: int = Field(ge=1)
+    display_tier: Literal["selected", "more"]
+    content_fingerprint: str
 
 
 class AIProvider(str, Enum):
@@ -304,6 +460,11 @@ class GitHubSourceConfig(BaseModel):
     username: Optional[str] = None
     owner: Optional[str] = None
     repo: Optional[str] = None
+    query: Optional[str] = None
+    fetch_limit: int = Field(default=20, ge=1, le=100)
+    min_stars: int = Field(default=0, ge=0)
+    discovery_window_days: int = Field(default=30, ge=1, le=365)
+    shadow: bool = False
     enabled: bool = True
     category: Optional[str] = None
     profile: ProfileRoute = None
@@ -341,6 +502,9 @@ class RSSSourceConfig(BaseModel):
     name: str
     url: HttpUrl
     enabled: bool = True
+    shadow: bool = False
+    expected_cadence_hours: float = Field(default=168, gt=0)
+    stale_after_multiplier: float = Field(default=3, gt=0)
     category: Optional[str] = None
     content_extractor: Optional[str] = None
     profile: ProfileRoute = None
@@ -376,6 +540,7 @@ class RedditConfig(BaseModel):
     """Reddit source configuration."""
 
     enabled: bool = True
+    shadow: bool = False
     subreddits: List[RedditSubredditConfig] = Field(default_factory=list)
     users: List[RedditUserConfig] = Field(default_factory=list)
     fetch_comments: int = 5  # top comments per post, 0 to disable
@@ -407,7 +572,8 @@ class TwitterConfig(BaseModel):
     """
 
     enabled: bool = True
-    mode: str = "apify"  # "apify" or "playwright"
+    mode: str = "apify"  # "apify", "playwright", or "official_api"
+    shadow: bool = False
     users: List[str] = Field(default_factory=list)
     fetch_limit: int = 10
     category: Optional[str] = None
@@ -419,9 +585,84 @@ class TwitterConfig(BaseModel):
     # Apify settings (used when mode == "apify")
     apify_token_env: str = "APIFY_TOKEN"
     actor_id: str = "altimis~scweet"
+    # Official X API settings (paid, so bounded and shadowed by default in production config)
+    official_bearer_token_env: str = "X_BEARER_TOKEN"
+    official_queries: List[str] = Field(default_factory=list)
+    official_max_requests_per_run: int = Field(default=2, ge=1, le=20)
+    # Optional local fallback. It reuses an already-authenticated desktop browser
+    # through OpenCLI and is not expected to exist on a cloud runner.
+    local_cli_fallback_enabled: bool = False
+    local_cli_command: str = "opencli"
+    local_cli_timeout_sec: int = Field(default=45, ge=5, le=300)
     # Playwright settings (used when mode == "playwright")
     cookie_dir: str = "data"
     cookie_file_pattern: str = "x_cookies_*.json"
+
+
+class YouTubeQueryConfig(BaseModel):
+    """One official YouTube Data API search lane."""
+
+    query: str = Field(min_length=1)
+    enabled: bool = True
+    fetch_limit: int = Field(default=10, ge=1, le=50)
+    order: Literal["date", "rating", "relevance", "viewCount"] = "viewCount"
+    category: Optional[str] = None
+    profile: ProfileRoute = None
+
+
+class YouTubeChannelConfig(BaseModel):
+    """One trusted YouTube channel monitored through its uploads playlist."""
+
+    channel_id: str = Field(min_length=1)
+    name: Optional[str] = None
+    enabled: bool = True
+    fetch_limit: int = Field(default=5, ge=1, le=50)
+    category: Optional[str] = None
+    profile: ProfileRoute = None
+
+
+class YouTubeDataConfig(BaseModel):
+    """Official YouTube search and native engagement enrichment."""
+
+    enabled: bool = False
+    shadow: bool = True
+    api_key_env: str = "YOUTUBE_DATA_API_KEY"
+    channels: List[YouTubeChannelConfig] = Field(default_factory=list)
+    queries: List[YouTubeQueryConfig] = Field(default_factory=list)
+    relevance_language: str = "en"
+    region_code: Optional[str] = "US"
+    max_units_per_run: int = Field(default=50, ge=2, le=10000)
+    # Optional anonymous local fallback. The official Data API remains preferred
+    # whenever a key is available.
+    local_cli_fallback_enabled: bool = False
+    local_cli_command: str = "yt-dlp"
+    local_cli_timeout_sec: int = Field(default=90, ge=10, le=600)
+    local_cli_concurrency: int = Field(default=2, ge=1, le=4)
+
+
+class BlueskyQueryConfig(BaseModel):
+    """One public Bluesky post-search lane."""
+
+    query: str = Field(min_length=1)
+    enabled: bool = True
+    fetch_limit: int = Field(default=25, ge=1, le=100)
+    sort: Literal["top", "latest"] = "top"
+    category: Optional[str] = None
+    profile: ProfileRoute = None
+
+
+class BlueskyConfig(BaseModel):
+    """Anonymous Bluesky AppView discovery configuration."""
+
+    enabled: bool = False
+    shadow: bool = True
+    public_api_base_url: HttpUrl = "https://public.api.bsky.app"
+    actors: List[str] = Field(default_factory=list)
+    actor_fetch_limit: int = Field(default=10, ge=1, le=100)
+    queries: List[BlueskyQueryConfig] = Field(default_factory=list)
+    max_requests_per_run: int = Field(default=8, ge=1, le=50)
+    category: Optional[str] = "overseas-ai-community"
+    profile: ProfileRoute = "pangmen-topic-radar"
 
 
 class OpenBBWatchlist(BaseModel):
@@ -640,10 +881,11 @@ class PlatformChangeWatcherConfig(BaseModel):
         "xiaohongshu_help_api",
         "bilibili_bundle_diff",
     ]
-    platform: Literal["douyin", "xiaohongshu", "bilibili", "wechat"]
+    platform: str = Field(min_length=1)
     enabled: bool = True
     url: Optional[HttpUrl] = None
     query: Optional[str] = None
+    fallback_query: Optional[str] = None
     api_role: str = "4"
     same_domain_only: bool = True
     include_patterns: List[str] = Field(default_factory=list)
@@ -689,11 +931,13 @@ class PlatformChangesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    shadow: bool = False
     lookback_days: int = Field(default=7, ge=1, le=30)
     state_file: str = "data/platform_change_state.json"
+    shadow_state_file: str = "data/shadow/platform_change_state.json"
     watchers: List[PlatformChangeWatcherConfig] = Field(default_factory=list)
 
-    @field_validator("state_file")
+    @field_validator("state_file", "shadow_state_file")
     @classmethod
     def validate_state_file(cls, value: str) -> str:
         if not value.strip():
@@ -710,6 +954,8 @@ class SourcesConfig(BaseModel):
     reddit: RedditConfig = Field(default_factory=RedditConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     twitter: Optional[TwitterConfig] = None
+    youtube: Optional[YouTubeDataConfig] = None
+    bluesky: Optional[BlueskyConfig] = None
     openbb: Optional[OpenBBConfig] = None
     ossinsight: OSSInsightConfig = Field(default_factory=OSSInsightConfig)
     gdelt: Optional[GDELTConfig] = None
@@ -741,6 +987,7 @@ class WebhookConfig(BaseModel):
     languages: Optional[List[str]] = (
         None  # Optional language filter for webhook delivery; defaults to all AI languages
     )
+    title_prefix: str = ""
     enabled: bool = False
 
     @field_validator("delivery")
@@ -866,15 +1113,141 @@ class EngagementTrackingConfig(BaseModel):
         return value
 
 
+class SocialEngagementPolicyConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    maturity_hours: float = Field(default=6, ge=0)
+    primary_metric: str = "views"
+    minimum_sample: int = Field(default=200, ge=0)
+    relative_quantile: float = Field(default=0.75, ge=0, le=1)
+    relative_ratio: float = Field(default=0.35, ge=0, le=1)
+    minimum_quality_score: float = Field(default=4, ge=0, le=10)
+    required_metrics: List[str] = Field(
+        default_factory=lambda: ["views", "likes", "comments"]
+    )
+    minimum_complete_fields: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def validate_metric_contract(self) -> "SocialEngagementPolicyConfig":
+        if self.primary_metric not in self.required_metrics:
+            raise ValueError("primary_metric must be included in required_metrics")
+        if self.minimum_complete_fields > len(self.required_metrics):
+            raise ValueError("minimum_complete_fields exceeds required_metrics")
+        return self
+
+
+class SocialEngagementQualityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    platforms: Dict[str, SocialEngagementPolicyConfig] = Field(default_factory=dict)
+
+
 class CollectionConfig(BaseModel):
     """Controls which source items are fetched."""
 
     model_config = ConfigDict(extra="forbid")
 
     time_window_hours: int = 24
+    source_registry_file: str | None = None
+    core_entity_registry_file: str | None = None
+    source_health_state_file: str = "data/shadow/source_health_state.json"
+    source_shadow_enabled: bool = False
     engagement_tracking: EngagementTrackingConfig = Field(
         default_factory=EngagementTrackingConfig
     )
+    social_engagement_quality: SocialEngagementQualityConfig = Field(
+        default_factory=SocialEngagementQualityConfig
+    )
+
+    @field_validator(
+        "source_registry_file",
+        "core_entity_registry_file",
+        "source_health_state_file",
+    )
+    @classmethod
+    def validate_source_state_paths(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip().replace("\\", "/")
+        if (
+            not normalized
+            or normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:/", normalized)
+            or ".." in normalized.split("/")
+        ):
+            raise ValueError("source registry/state paths must be relative safe paths")
+        return normalized
+
+
+class IntelligenceSelectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_min_items: int = Field(default=8, ge=1)
+    max_items: int = Field(default=12, ge=1)
+    minimum_score: float = Field(default=6.5, ge=0, le=10)
+    author_limit: int = Field(default=2, ge=1)
+    source_limit: int = Field(default=3, ge=1)
+    platform_limit: int = Field(default=4, ge=1)
+    topic_limit: int = Field(default=1, ge=1)
+    unverified_hot_limit: int = Field(default=3, ge=0)
+    cooldown_days: int = Field(default=7, ge=1)
+    major_event_override_score: float = Field(default=9, ge=0, le=10)
+
+
+class IntelligenceRadarConfig(BaseModel):
+    """Safe-by-default controls for the redesigned intelligence pipeline."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    delivery_enabled: bool = False
+    run_mode: RadarRunMode = RadarRunMode.SHADOW
+    decision_lanes: List[DecisionLane] = Field(
+        default_factory=lambda: list(DecisionLane)
+    )
+    candidate_store_file: str = "data/candidates/candidate_ledger.jsonl"
+    delivery_store_file: str = "data/candidates/delivery_ledger.jsonl"
+    rule_version: str = "2026-09-03-v1"
+    selection: IntelligenceSelectionConfig = Field(
+        default_factory=IntelligenceSelectionConfig
+    )
+
+    @model_validator(mode="after")
+    def validate_delivery_mode(self) -> "IntelligenceRadarConfig":
+        if self.delivery_enabled and self.run_mode is RadarRunMode.SHADOW:
+            raise ValueError(
+                "intelligence delivery cannot be enabled in shadow mode"
+            )
+        return self
+
+    @field_validator("candidate_store_file", "delivery_store_file")
+    @classmethod
+    def validate_ledger_paths(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        if (
+            not normalized
+            or normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:/", normalized)
+            or ".." in normalized.split("/")
+        ):
+            raise ValueError("intelligence ledger paths must be relative safe paths")
+        return normalized
+
+    @field_validator("decision_lanes")
+    @classmethod
+    def validate_decision_lanes(cls, value: List[DecisionLane]) -> List[DecisionLane]:
+        if not value or len(value) != len(set(value)):
+            raise ValueError("intelligence.decision_lanes must be non-empty and unique")
+        return value
+
+    @field_validator("rule_version")
+    @classmethod
+    def validate_rule_version(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("intelligence.rule_version cannot be empty")
+        return value.strip()
 
 
 class EditorialSelectionConfig(BaseModel):
@@ -958,9 +1331,16 @@ class Config(BaseModel):
     ai: AIConfig
     sources: SourcesConfig
     collection: CollectionConfig = Field(default_factory=CollectionConfig)
+    intelligence: IntelligenceRadarConfig = Field(
+        default_factory=IntelligenceRadarConfig
+    )
     digest: DigestConfig = Field(default_factory=DigestConfig)
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     extractors: Dict[str, ExtractorConfig] = Field(default_factory=dict)
     email: Optional[EmailConfig] = None
     webhook: Optional[WebhookConfig] = None
+
+    @property
+    def delivery_allowed(self) -> bool:
+        return not self.intelligence.enabled or self.intelligence.delivery_enabled

@@ -1,6 +1,7 @@
 """Main orchestrator coordinating the entire workflow."""
 
 import asyncio
+import hashlib
 import json
 import inspect
 import math
@@ -15,16 +16,26 @@ import httpx
 from rich.console import Console
 
 from .console_icons import get_icons
-from .models import Config, ContentItem, SourceType
+from .models import (
+    CandidateStatus,
+    CandidateStatusTransition,
+    Config,
+    ContentItem,
+    ReasonCode,
+    SourceType,
+)
 from .storage.manager import StorageManager, safe_output_path
 from .services.email import EmailManager
 from .services.webhook import WebhookNotifier
 from .scrapers.github import GitHubScraper
+from .scrapers.youtube import YouTubeDataScraper
+from .scrapers.bluesky import BlueskyScraper
 from .scrapers.hackernews import HackerNewsScraper
 from .scrapers.rss import RSSScraper
 from .scrapers.reddit import RedditScraper
 from .scrapers.telegram import TelegramScraper
 from .scrapers.twitter import TwitterScraper
+from .scrapers.x_official import XOfficialScraper
 from .scrapers.twitter_playwright import TwitterPlaywrightScraper
 from .scrapers.openbb import OpenBBScraper
 from .scrapers.ossinsight import OSSInsightScraper
@@ -48,6 +59,25 @@ from .ai.summarizer import DailySummarizer
 from .ai.enricher import ContentEnricher, EnrichmentBatchResult
 from .ai.tokens import get_usage_snapshot
 from .processing import ProfileRegistry
+from .processing.source_health import (
+    CoreEntityRegistry,
+    CoverageReport,
+    EntityCoverageReport,
+    SourceRegistry,
+)
+from .processing.social_quality import SocialEngagementQualityGate
+from .processing.candidate_identity import (
+    group_duplicate_candidates,
+    merge_duplicate_group,
+)
+from .processing.candidate_pipeline import CandidateBuilder
+from .processing.intelligence_selection import IntelligenceSelector
+from .processing.delivery_selection import DeliverySelector
+from .processing.intelligence_brief import render_intelligence_brief
+from .diagnostics.intelligence_report import build_intelligence_report
+from .storage.candidate_export import export_candidates
+from .storage.candidate_store import CandidateStore
+from .storage.delivery_store import DeliveryStore
 
 
 _TRACKING_QUERY_PARAMETERS = {
@@ -274,6 +304,9 @@ class SourceFetchOutcome:
     items: List[ContentItem] = field(default_factory=list)
     error: Optional[str] = None
     watcher_health: List[Dict[str, object]] = field(default_factory=list)
+    provider_health: List[Dict[str, object]] = field(default_factory=list)
+    feed_health: List[Dict[str, object]] = field(default_factory=list)
+    source_health: List[Dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         result: Dict[str, object] = {
@@ -285,6 +318,12 @@ class SourceFetchOutcome:
             result["error"] = self.error
         if self.watcher_health:
             result["watchers"] = self.watcher_health
+        if self.provider_health:
+            result["providers"] = self.provider_health
+        if self.feed_health:
+            result["feeds"] = self.feed_health
+        if self.source_health:
+            result["source_health"] = self.source_health
         return result
 
 
@@ -293,6 +332,7 @@ class FetchReport:
     """Aggregate diagnostics for one fetch across configured sources."""
 
     outcomes: List[SourceFetchOutcome] = field(default_factory=list)
+    source_coverage: Optional[Dict[str, object]] = None
 
     @property
     def status(self) -> Literal["not_attempted", "success", "partial_failure", "failure"]:
@@ -321,7 +361,7 @@ class FetchReport:
         return f"All {len(self.outcomes)} attempted sources failed ({failures})"
 
     def to_dict(self) -> Dict[str, object]:
-        return {
+        result: Dict[str, object] = {
             "status": self.status,
             "attempted": len(self.outcomes),
             "successful": len(self.outcomes) - self.failed_count,
@@ -330,6 +370,9 @@ class FetchReport:
             "item_count": sum(len(outcome.items) for outcome in self.outcomes),
             "sources": [outcome.to_dict() for outcome in self.outcomes],
         }
+        if self.source_coverage is not None:
+            result["source_coverage"] = self.source_coverage
+        return result
 
 
 class HorizonOrchestrator:
@@ -377,13 +420,54 @@ class HorizonOrchestrator:
                     "digest.profile_order must list every loaded profile exactly once "
                     f"({'; '.join(details)})"
                 )
-        self.email_manager = EmailManager(config.email, console=self.console) if config.email else None
+        self.email_manager = (
+            EmailManager(config.email, console=self.console)
+            if config.email and config.delivery_allowed
+            else None
+        )
         self.webhook_notifier = (
             WebhookNotifier(config.webhook, console=self.console, icons=self.icons)
-            if config.webhook and config.webhook.enabled
+            if config.webhook and config.webhook.enabled and config.delivery_allowed
             else None
         )
         self.last_fetch_report: Optional[FetchReport] = None
+        self.last_social_quality_observing: list[ContentItem] = []
+        self.last_social_quality_rejected: list[ContentItem] = []
+        self.last_intelligence_candidates = []
+        self.source_registry: SourceRegistry | None = None
+        self.source_coverage: CoverageReport | None = None
+        self.core_entity_registry: CoreEntityRegistry | None = None
+        self.entity_coverage: EntityCoverageReport | None = None
+        if config.collection.source_registry_file:
+            production_intelligence = bool(
+                config.intelligence.enabled
+                and config.intelligence.delivery_enabled
+            )
+            self.source_registry = SourceRegistry.load(
+                Path(config.collection.source_registry_file)
+            )
+            self.source_coverage = self.source_registry.coverage_report(
+                production=production_intelligence
+            )
+            if config.collection.core_entity_registry_file:
+                self.core_entity_registry = CoreEntityRegistry.load(
+                    Path(config.collection.core_entity_registry_file)
+                )
+                self.entity_coverage = self.source_registry.entity_coverage_report(
+                    self.core_entity_registry,
+                    production=production_intelligence,
+                )
+            if production_intelligence:
+                blocked = []
+                if self.source_coverage and not self.source_coverage.ready:
+                    blocked.append("decision-lane coverage")
+                if self.entity_coverage and not self.entity_coverage.ready:
+                    blocked.append("core-entity coverage")
+                if blocked:
+                    raise ValueError(
+                        "production source coverage gate failed: "
+                        + ", ".join(blocked)
+                    )
 
     @staticmethod
     def _update_candidate_trace(
@@ -452,15 +536,30 @@ class HorizonOrchestrator:
                     self.console.print("[yellow]No new content found. Exiting.[/yellow]")
                     return
                 merged_items = self.merge_cross_source_duplicates(all_items)
-                merged_cache = self._cache_path("merged")
-                self._save_items_cache(merged_cache, merged_items)
-                self.console.print(f"   Saved merged cache: {merged_cache}")
             if len(merged_items) < len(all_items):
                 self.console.print(
                     f"{self.icons['merge']} Merged "
                     f"{len(all_items) - len(merged_items)} cross-source duplicates "
                     f"→ {len(merged_items)} unique items\n"
                 )
+
+            merged_items = self._apply_social_quality_gate(merged_items)
+            if not resume_cache:
+                merged_cache = self._cache_path("merged")
+                self._save_items_cache(merged_cache, merged_items)
+                self.console.print(f"   Saved merged cache: {merged_cache}")
+
+            if not merged_items:
+                if self.config.intelligence.enabled:
+                    artifact_paths = self._archive_preanalysis_only()
+                    self.console.print(
+                        "   Saved observation/rejection archive: "
+                        f"{artifact_paths['html']}"
+                    )
+                self.console.print(
+                    "[yellow]No candidates passed the pre-analysis hard gates.[/yellow]"
+                )
+                return
 
             # 4. Analyze with AI
             analysis_checkpoint = self._cache_path("analysis")
@@ -473,9 +572,14 @@ class HorizonOrchestrator:
             )
 
             # 5. Filter, deduplicate, and balance the digest
-            filtering_result = await self.select_digest_items(
-                analyzed_items,
-            )
+            if self.config.intelligence.enabled:
+                filtering_result = self._select_intelligence_candidates(
+                    analyzed_items
+                )
+            else:
+                filtering_result = await self.select_digest_items(
+                    analyzed_items,
+                )
             important_items = filtering_result.items
             exclusion_stages = dict(filtering_result.exclusion_stages)
 
@@ -489,62 +593,141 @@ class HorizonOrchestrator:
             self.console.print("")
 
             # 6. Search related stories + enrich with background knowledge (2nd AI pass)
-            attempted_ids = {item.id for item in important_items}
             failed_ids: set[str] = set()
-            enriched_ids: set[str] = set()
-            pending = list(important_items)
-            while pending:
-                enrichment_result = await self.enrich_items(pending)
-                batch_failed = set(enrichment_result.failed_ids) if enrichment_result else set()
-                batch_succeeded = (
-                    set(enrichment_result.succeeded_ids) - batch_failed
-                    if enrichment_result
-                    else {item.id for item in pending}
+            if self.config.intelligence.enabled:
+                enrichment_result = await self.enrich_items(important_items)
+                failed_ids = (
+                    set(enrichment_result.failed_ids) if enrichment_result else set()
                 )
-                failed_ids.update(batch_failed)
-                enriched_ids.update(batch_succeeded)
-                for item_id in batch_failed:
+                for item_id in failed_ids:
                     exclusion_stages[item_id] = "enrichment_failed"
-
-                available = [
-                    item
-                    for item in filtering_result.eligible_items
-                    if item.id not in failed_ids
+                important_items = [
+                    item for item in important_items if item.id not in failed_ids
                 ]
-                refill = self.apply_balanced_digest(available, log=False).items
-                pending = [
-                    item
-                    for item in refill
-                    if item.id not in enriched_ids and item.id not in attempted_ids
-                ]
-                attempted_ids.update(item.id for item in pending)
-                if not batch_failed:
-                    break
+                if failed_ids:
+                    self._mark_intelligence_enrichment_failures(failed_ids)
+            else:
+                attempted_ids = {item.id for item in important_items}
+                enriched_ids: set[str] = set()
+                pending = list(important_items)
+                while pending:
+                    enrichment_result = await self.enrich_items(pending)
+                    batch_failed = set(enrichment_result.failed_ids) if enrichment_result else set()
+                    batch_succeeded = (
+                        set(enrichment_result.succeeded_ids) - batch_failed
+                        if enrichment_result
+                        else {item.id for item in pending}
+                    )
+                    failed_ids.update(batch_failed)
+                    enriched_ids.update(batch_succeeded)
+                    for item_id in batch_failed:
+                        exclusion_stages[item_id] = "enrichment_failed"
 
-            important_items = [
-                item
-                for item in self.apply_balanced_digest(
-                    [item for item in filtering_result.eligible_items if item.id not in failed_ids],
-                    log=False,
-                ).items
-                if item.id in enriched_ids
-            ]
-            self._editorial_selector().record_selected(important_items)
+                    available = [
+                        item
+                        for item in filtering_result.eligible_items
+                        if item.id not in failed_ids
+                    ]
+                    refill = self.apply_balanced_digest(available, log=False).items
+                    pending = [
+                        item
+                        for item in refill
+                        if item.id not in enriched_ids and item.id not in attempted_ids
+                    ]
+                    attempted_ids.update(item.id for item in pending)
+                    if not batch_failed:
+                        break
+
+                important_items = [
+                    item
+                    for item in self.apply_balanced_digest(
+                        [item for item in filtering_result.eligible_items if item.id not in failed_ids],
+                        log=False,
+                    ).items
+                    if item.id in enriched_ids
+                ]
+                self._editorial_selector().record_selected(important_items)
             if failed_ids:
                 self.console.print(
                     f"   Removed {len(failed_ids)} items that could not produce "
                     "usable enrichment output\n"
                 )
 
-            diagnostics = self.build_selection_diagnostics(
-                analyzed_items,
-                important_items,
-                exclusion_stages=exclusion_stages,
-            )
-            diagnostics_path = self._save_selection_diagnostics(diagnostics)
-            self.console.print(
-                f"   Saved selection diagnostics: {diagnostics_path}"
-            )
+            if self.config.intelligence.enabled:
+                run_id = datetime.now(timezone.utc).strftime(
+                    "run-%Y%m%dT%H%M%SZ"
+                )
+                artifact_paths = self._save_intelligence_artifacts(run_id)
+                self.console.print(
+                    "   Saved candidate archive: "
+                    f"{artifact_paths['html']}"
+                )
+                self.console.print(
+                    "   Saved intelligence diagnostics: "
+                    f"{artifact_paths['diagnostics']}"
+                )
+                if not self.config.delivery_allowed:
+                    self.console.print(
+                        "[yellow]Intelligence shadow run completed; formal "
+                        "summaries and delivery remain disabled.[/yellow]"
+                    )
+                    return
+                delivery_store = DeliveryStore(
+                    Path(self.config.intelligence.delivery_store_file)
+                )
+                fetch_status = (
+                    self.last_fetch_report.status
+                    if self.last_fetch_report is not None
+                    else "success"
+                )
+                pipeline_status = (
+                    "pipeline_failed"
+                    if fetch_status == "failure"
+                    else (
+                        "collection_degraded"
+                        if fetch_status == "partial_failure"
+                        else "healthy"
+                    )
+                )
+                delivery_selection = DeliverySelector().select(
+                    [
+                        candidate
+                        for candidate in self.last_intelligence_candidates
+                        if candidate.status is CandidateStatus.SELECTED
+                    ],
+                    more_candidates=[
+                        candidate
+                        for candidate in self.last_intelligence_candidates
+                        if candidate.status is CandidateStatus.HELD
+                        and ReasonCode.HELD_BY_CAPACITY
+                        in candidate.reason_codes
+                    ],
+                    run_id=run_id,
+                    run_mode=self.config.intelligence.run_mode,
+                    now=datetime.now(timezone.utc),
+                    deliveries=delivery_store.all(),
+                    pipeline_status=pipeline_status,
+                )
+                if delivery_selection.status != "send":
+                    self.console.print(
+                        "[yellow]No formal digest generated: "
+                        f"{delivery_selection.status}.[/yellow]"
+                    )
+                    return
+                important_items = [
+                    candidate.item
+                    for candidate in delivery_selection.candidates
+                ]
+            else:
+                diagnostics = self.build_selection_diagnostics(
+                    analyzed_items,
+                    important_items,
+                    exclusion_stages=exclusion_stages,
+                )
+                diagnostics_path = self._save_selection_diagnostics(diagnostics)
+                self.console.print(
+                    f"   Saved selection diagnostics: {diagnostics_path}"
+                )
 
             # 7. Generate and save daily summaries for each configured language
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -553,7 +736,21 @@ class HorizonOrchestrator:
                     profile_names=self.profiles.names,
                     profile_order=self.config.digest.profile_order,
                 )
-                summary = await summarizer.generate_summary(important_items, today, len(all_items), language=lang)
+                if self.config.intelligence.enabled:
+                    summary = render_intelligence_brief(
+                        delivery_selection.candidates,
+                        more_candidates=delivery_selection.more_candidates,
+                        date=today,
+                        run_mode=self.config.intelligence.run_mode,
+                        total_fetched=len(all_items),
+                    )
+                else:
+                    summary = await summarizer.generate_summary(
+                        important_items,
+                        today,
+                        len(all_items),
+                        language=lang,
+                    )
 
                 # Save to data/summaries/
                 summary_path = self.storage.save_daily_summary(today, summary, language=lang)
@@ -622,6 +819,9 @@ class HorizonOrchestrator:
                         summarizer=summarizer,
                     )
 
+            if self.config.intelligence.enabled:
+                delivery_store.append_many(delivery_selection.records)
+
             self.console.print(
                 f"[bold green]{self.icons['success']} "
                 "Horizon completed successfully![/bold green]"
@@ -647,6 +847,23 @@ class HorizonOrchestrator:
             )
 
             raise
+
+    def _apply_social_quality_gate(
+        self,
+        items: list[ContentItem],
+        *,
+        now: datetime | None = None,
+    ) -> list[ContentItem]:
+        collection = getattr(self.config, "collection", None)
+        quality_config = getattr(collection, "social_engagement_quality", None)
+        if quality_config is None:
+            self.last_social_quality_observing = []
+            self.last_social_quality_rejected = []
+            return items
+        result = SocialEngagementQualityGate(quality_config).evaluate(items, now=now)
+        self.last_social_quality_observing = result.observing
+        self.last_social_quality_rejected = result.rejected
+        return result.eligible
 
     def _determine_time_window(self, force_hours: int = None) -> datetime:
         if force_hours:
@@ -683,9 +900,24 @@ class HorizonOrchestrator:
             tasks = []
 
             # GitHub sources
-            if self.config.sources.github:
-                github_scraper = GitHubScraper(self.config.sources.github, client)
+            github_sources = self._enabled_github_sources()
+            if github_sources:
+                github_scraper = GitHubScraper(github_sources, client)
                 tasks.append(self._fetch_with_progress("GitHub", github_scraper, since))
+
+            if self._youtube_source_enabled():
+                youtube_scraper = YouTubeDataScraper(self.config.sources.youtube, client)
+                tasks.append(
+                    self._fetch_with_progress("YouTube Data", youtube_scraper, since)
+                )
+
+            if self._bluesky_source_enabled():
+                bluesky_scraper = BlueskyScraper(
+                    self.config.sources.bluesky, client
+                )
+                tasks.append(
+                    self._fetch_with_progress("Bluesky", bluesky_scraper, since)
+                )
 
             # Hacker News
             if self.config.sources.hackernews.enabled:
@@ -693,17 +925,18 @@ class HorizonOrchestrator:
                 tasks.append(self._fetch_with_progress("Hacker News", hn_scraper, since))
 
             # RSS feeds
-            if self.config.sources.rss:
+            rss_sources = self._enabled_rss_sources()
+            if rss_sources:
                 from .extractors import ExtractorRegistry
                 rss_scraper = RSSScraper(
-                    self.config.sources.rss,
+                    rss_sources,
                     client,
                     ExtractorRegistry(self.config.extractors),
                 )
                 tasks.append(self._fetch_with_progress("RSS Feeds", rss_scraper, since))
 
             # Reddit
-            if self.config.sources.reddit.enabled:
+            if self._reddit_source_enabled():
                 reddit_scraper = RedditScraper(self.config.sources.reddit, client)
                 tasks.append(self._fetch_with_progress("Reddit", reddit_scraper, since))
 
@@ -713,10 +946,12 @@ class HorizonOrchestrator:
                 tasks.append(self._fetch_with_progress("Telegram", telegram_scraper, since))
 
             # Twitter (Apify or Playwright mode)
-            if self.config.sources.twitter and self.config.sources.twitter.enabled:
+            if self._twitter_source_enabled():
                 tw_cfg = self.config.sources.twitter
                 if tw_cfg.mode == "playwright":
                     twitter_scraper = TwitterPlaywrightScraper(tw_cfg)
+                elif tw_cfg.mode == "official_api":
+                    twitter_scraper = XOfficialScraper(tw_cfg, client)
                 else:
                     twitter_scraper = TwitterScraper(tw_cfg, client)
                 tasks.append(self._fetch_with_progress("Twitter", twitter_scraper, since))
@@ -778,8 +1013,22 @@ class HorizonOrchestrator:
                 getattr(self.config.sources, "platform_changes", None)
                 and self.config.sources.platform_changes.enabled
             ):
+                platform_change_config = self.config.sources.platform_changes
+                intelligence_config = getattr(self.config, "intelligence", None)
+                if (
+                    intelligence_config is not None
+                    and getattr(intelligence_config, "enabled", False)
+                    and not getattr(self.config, "delivery_allowed", True)
+                    and getattr(platform_change_config, "shadow", False)
+                ):
+                    platform_change_config = platform_change_config.model_copy(
+                        update={
+                            "state_file": platform_change_config.shadow_state_file
+                        },
+                        deep=True,
+                    )
                 change_scraper = PlatformChangesScraper(
-                    self.config.sources.platform_changes, client
+                    platform_change_config, client
                 )
                 tasks.append(
                     self._fetch_with_progress(
@@ -789,7 +1038,15 @@ class HorizonOrchestrator:
 
             # Fetch all concurrently
             outcomes = await asyncio.gather(*tasks)
-            self.last_fetch_report = FetchReport(outcomes=list(outcomes))
+            source_coverage = getattr(self, "source_coverage", None)
+            self.last_fetch_report = FetchReport(
+                outcomes=list(outcomes),
+                source_coverage=(
+                    source_coverage.model_dump(mode="json")
+                    if source_coverage is not None
+                    else None
+                ),
+            )
 
             # Flatten successful and empty outcomes; failures remain in the report.
             all_items: List[ContentItem] = []
@@ -806,16 +1063,79 @@ class HorizonOrchestrator:
                     refresh_after_hours=tracking_cfg.refresh_after_hours,
                     thresholds=thresholds or None,
                 )
-                rising_ids = {
-                    item.id for item in tracker.observe(all_items)
-                }
+                tracker.observe(all_items)
                 all_items = [
                     item
                     for item in all_items
-                    if item.published_at >= requested_since or item.id in rising_ids
+                    if item.published_at >= requested_since
+                    or item.id in tracker.last_refreshed_ids
                 ]
 
             return all_items
+
+    def _enabled_github_sources(self):
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return [
+            source
+            for source in self.config.sources.github
+            if getattr(source, "enabled", True)
+            and (not getattr(source, "shadow", False) or shadow_enabled)
+        ]
+
+    def _enabled_rss_sources(self):
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return [
+            source
+            for source in self.config.sources.rss
+            if getattr(source, "enabled", True)
+            and (not getattr(source, "shadow", False) or shadow_enabled)
+        ]
+
+    def _youtube_source_enabled(self) -> bool:
+        source = getattr(self.config.sources, "youtube", None)
+        if source is None or not source.enabled:
+            return False
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return not source.shadow or shadow_enabled
+
+    def _bluesky_source_enabled(self) -> bool:
+        source = getattr(self.config.sources, "bluesky", None)
+        if source is None or not source.enabled:
+            return False
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return not source.shadow or shadow_enabled
+
+    def _twitter_source_enabled(self) -> bool:
+        source = getattr(self.config.sources, "twitter", None)
+        if source is None or not source.enabled:
+            return False
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return not source.shadow or shadow_enabled
+
+    def _reddit_source_enabled(self) -> bool:
+        source = getattr(self.config.sources, "reddit", None)
+        if source is None or not source.enabled:
+            return False
+        collection = getattr(self.config, "collection", None)
+        shadow_enabled = bool(
+            getattr(collection, "source_shadow_enabled", False)
+        )
+        return not source.shadow or shadow_enabled
 
     async def _fetch_with_progress(
         self, name: str, scraper, since: datetime
@@ -844,6 +1164,45 @@ class HorizonOrchestrator:
 
         self.console.print(f"   Found {len(items)} items from {name}")
 
+        provider_health = list(
+            getattr(scraper, "last_provider_results", []) or []
+        )
+        if (
+            not items
+            and provider_health
+            and all(row.get("status") == "failed" for row in provider_health)
+        ):
+            return SourceFetchOutcome(
+                source_name=name,
+                status="failure",
+                error="all configured providers failed",
+                provider_health=provider_health,
+            )
+        feed_health = list(getattr(scraper, "last_feed_results", []) or [])
+        if (
+            not items
+            and feed_health
+            and all(row.get("status") == "failed" for row in feed_health)
+        ):
+            return SourceFetchOutcome(
+                source_name=name,
+                status="failure",
+                error="all configured feeds failed",
+                feed_health=feed_health,
+            )
+        source_health = list(getattr(scraper, "last_source_results", []) or [])
+        if (
+            not items
+            and source_health
+            and all(row.get("status") == "failed" for row in source_health)
+        ):
+            return SourceFetchOutcome(
+                source_name=name,
+                status="failure",
+                error="all configured sub-sources failed",
+                source_health=source_health,
+            )
+
         # Show per-sub-source breakdown when there are multiple sub-sources
         sub_counts: Dict[str, int] = defaultdict(int)
         for item in items:
@@ -857,6 +1216,9 @@ class HorizonOrchestrator:
             status="success" if items else "empty",
             items=items,
             watcher_health=list(getattr(scraper, "last_watcher_results", []) or []),
+            provider_health=provider_health,
+            feed_health=feed_health,
+            source_health=source_health,
         )
 
     @staticmethod
@@ -1190,6 +1552,423 @@ class HorizonOrchestrator:
 
     def _editorial_selector(self) -> EditorialSelector:
         return EditorialSelector(self.config.digest.editorial_selection)
+
+    def _select_intelligence_candidates(
+        self,
+        items: List[ContentItem],
+    ) -> FilteringPipelineResult:
+        builder = CandidateBuilder(self.config.intelligence.rule_version)
+        store = CandidateStore(Path(self.config.intelligence.candidate_store_file))
+        historical_candidates = store.all_latest()
+        historical_by_id = {
+            candidate.candidate_id: candidate
+            for candidate in historical_candidates
+        }
+        preanalysis_candidates = [
+            self._carry_observation_history(
+                builder.from_preanalysis_item(item),
+                historical_by_id.get(item.id),
+            )
+            for item in (
+                self.last_social_quality_observing
+                + self.last_social_quality_rejected
+            )
+        ]
+        analyzed_candidates = [builder.from_analyzed_item(item) for item in items]
+        analyzed_candidates = self._assign_intelligence_event_versions(
+            analyzed_candidates,
+            historical_candidates,
+        )
+        analyzed_candidates = [
+            self._carry_candidate_history(
+                candidate,
+                historical_by_id.get(candidate.candidate_id),
+            )
+            for candidate in analyzed_candidates
+        ]
+        eligible = [
+            candidate
+            for candidate in analyzed_candidates
+            if candidate.status is CandidateStatus.ELIGIBLE
+        ]
+        noneligible = [
+            candidate
+            for candidate in analyzed_candidates
+            if candidate.status is not CandidateStatus.ELIGIBLE
+        ]
+
+        primary_candidates = []
+        merged_candidates = []
+        for group in group_duplicate_candidates(eligible):
+            merge_result = merge_duplicate_group(group)
+            primary_candidates.append(merge_result.primary)
+            merged_candidates.extend(merge_result.duplicates)
+
+        delivery_history = DeliveryStore(
+            Path(self.config.intelligence.delivery_store_file)
+        ).all()
+        selection = IntelligenceSelector(
+            self.config.intelligence.selection
+        ).select(primary_candidates, deliveries=delivery_history)
+        all_candidates = [
+            *preanalysis_candidates,
+            *noneligible,
+            *selection.selected,
+            *selection.held,
+            *selection.rejected,
+            *merged_candidates,
+        ]
+        self.last_intelligence_candidates = all_candidates
+        for candidate in all_candidates:
+            store.record_snapshot(candidate)
+
+        chosen_items = [candidate.item for candidate in selection.selected]
+        selectable_items = [
+            candidate.item for candidate in (*selection.selected, *selection.held)
+        ]
+        exclusions = {
+            candidate.candidate_id: (
+                candidate.reason_codes[-1].value
+                if candidate.reason_codes
+                else candidate.status.value
+            )
+            for candidate in all_candidates
+            if candidate.status is not CandidateStatus.SELECTED
+        }
+        balanced = BalancedDigestResult(items=chosen_items, enabled=True)
+        return FilteringPipelineResult(
+            items=chosen_items,
+            threshold_count=len(eligible),
+            topic_dedup_count=len(primary_candidates),
+            topic_dedup_removed=len(merged_candidates),
+            balanced_digest=balanced,
+            eligible_count=len(primary_candidates),
+            eligible_items=selectable_items,
+            exclusion_stages=exclusions,
+        )
+
+    def _archive_preanalysis_only(self) -> dict[str, Path]:
+        self._select_intelligence_candidates([])
+        run_id = datetime.now(timezone.utc).strftime(
+            "run-%Y%m%dT%H%M%SZ"
+        )
+        return self._save_intelligence_artifacts(run_id)
+
+    @staticmethod
+    def _carry_observation_history(candidate, previous):
+        if candidate.status not in {
+            CandidateStatus.OBSERVING,
+            CandidateStatus.REJECTED,
+        }:
+            return candidate
+        metadata = dict(candidate.item.metadata)
+        previous_metadata = previous.item.metadata if previous is not None else {}
+        first_observed = (
+            previous_metadata.get("first_observed_at")
+            or metadata.get("first_observed_at")
+            or candidate.discovered_at.isoformat()
+        )
+        observed_at = (
+            metadata.get("last_observed_at")
+            or candidate.updated_at.isoformat()
+        )
+        snapshots = list(previous_metadata.get("engagement_snapshots") or [])
+        engagement = metadata.get("engagement")
+        if isinstance(engagement, dict) and not any(
+            row.get("observed_at") == observed_at
+            for row in snapshots
+            if isinstance(row, dict)
+        ):
+            snapshots.append(
+                {
+                    "observed_at": observed_at,
+                    "engagement": dict(engagement),
+                }
+            )
+        metadata.update(
+            {
+                "first_observed_at": first_observed,
+                "last_observed_at": observed_at,
+                "observation_count": len(snapshots),
+                "engagement_snapshots": snapshots,
+            }
+        )
+        item = candidate.item.model_copy(
+            update={"metadata": metadata},
+            deep=True,
+        )
+        status_history = list(
+            previous.status_history
+            if previous is not None
+            else candidate.status_history
+        )
+        if previous is not None and previous.status is not candidate.status:
+            status_history.append(
+                CandidateStatusTransition(
+                    from_status=previous.status,
+                    to_status=candidate.status,
+                    changed_at=candidate.updated_at,
+                    reason_code=(
+                        candidate.reason_codes[-1]
+                        if candidate.reason_codes
+                        else None
+                    ),
+                )
+            )
+        return candidate.model_copy(
+            update={
+                "item": item,
+                "discovered_at": (
+                    min(previous.discovered_at, candidate.discovered_at)
+                    if previous is not None
+                    else candidate.discovered_at
+                ),
+                "status_history": status_history,
+            },
+            deep=True,
+        )
+
+    @staticmethod
+    def _carry_candidate_history(candidate, previous):
+        if previous is None:
+            return candidate
+        metadata = dict(candidate.item.metadata)
+        for key in (
+            "first_observed_at",
+            "last_observed_at",
+            "observation_count",
+            "observation_deadline",
+            "engagement_snapshots",
+        ):
+            if key not in metadata and key in previous.item.metadata:
+                metadata[key] = previous.item.metadata[key]
+        history = list(previous.status_history)
+        if previous.status is not candidate.status:
+            history.append(
+                CandidateStatusTransition(
+                    from_status=previous.status,
+                    to_status=candidate.status,
+                    changed_at=candidate.updated_at,
+                    reason_code=(
+                        candidate.reason_codes[-1]
+                        if candidate.reason_codes
+                        else None
+                    ),
+                )
+            )
+        return candidate.model_copy(
+            update={
+                "item": candidate.item.model_copy(
+                    update={"metadata": metadata},
+                    deep=True,
+                ),
+                "discovered_at": min(
+                    previous.discovered_at,
+                    candidate.discovered_at,
+                ),
+                "status_history": history,
+            },
+            deep=True,
+        )
+
+    @staticmethod
+    def _assign_intelligence_event_versions(
+        candidates,
+        historical_candidates,
+    ):
+        material_bases = {
+            "new_release",
+            "new_data",
+            "new_angle",
+            "ongoing_update",
+        }
+        history_by_id = {
+            candidate.candidate_id: candidate
+            for candidate in historical_candidates
+        }
+        versions_by_event: dict[str, list[int]] = defaultdict(list)
+        version_times: dict[tuple[str, int], datetime] = {}
+        for candidate in historical_candidates:
+            if candidate.event_key:
+                versions_by_event[candidate.event_key].append(
+                    candidate.event_version
+                )
+                version_key = (candidate.event_key, candidate.event_version)
+                observed_at = (
+                    candidate.event_version_at
+                    or candidate.discovered_at
+                )
+                previous_time = version_times.get(version_key)
+                if previous_time is None or observed_at < previous_time:
+                    version_times[version_key] = observed_at
+
+        updated = []
+        for candidate in candidates:
+            existing = history_by_id.get(candidate.candidate_id)
+            if existing is not None:
+                event_version = existing.event_version
+                novelty_basis = (
+                    candidate.intelligence.novelty_basis
+                    if candidate.intelligence is not None
+                    else "none"
+                )
+                if (
+                    novelty_basis in material_bases
+                    and HorizonOrchestrator._candidate_material_fingerprint(candidate)
+                    != HorizonOrchestrator._candidate_material_fingerprint(existing)
+                ):
+                    event_version += 1
+                    event_version_at = candidate.item.fetched_at
+                else:
+                    event_version_at = (
+                        existing.event_version_at
+                        or existing.discovered_at
+                    )
+                updated.append(
+                    candidate.model_copy(
+                        update={
+                            "event_version": event_version,
+                            "event_version_at": event_version_at,
+                        },
+                        deep=True,
+                    )
+                )
+                versions_by_event[candidate.event_key or ""].append(event_version)
+                continue
+            previous_versions = versions_by_event.get(candidate.event_key or "", [])
+            if not previous_versions:
+                updated.append(candidate)
+                continue
+            event_version = max(previous_versions)
+            novelty_basis = (
+                candidate.intelligence.novelty_basis
+                if candidate.intelligence is not None
+                else "none"
+            )
+            if novelty_basis in material_bases:
+                event_version += 1
+                event_version_at = candidate.item.fetched_at
+            else:
+                event_version_at = version_times.get(
+                    (candidate.event_key or "", event_version),
+                    candidate.event_version_at or candidate.discovered_at,
+                )
+            updated_candidate = candidate.model_copy(
+                update={
+                    "event_version": event_version,
+                    "event_version_at": event_version_at,
+                },
+                deep=True,
+            )
+            updated.append(updated_candidate)
+            versions_by_event[candidate.event_key or ""].append(event_version)
+        return updated
+
+    @staticmethod
+    def _candidate_material_fingerprint(candidate) -> str:
+        payload = {
+            "title": re.sub(r"\s+", " ", candidate.item.title).strip(),
+            "content": re.sub(
+                r"\s+",
+                " ",
+                candidate.item.content or "",
+            ).strip(),
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def _mark_intelligence_enrichment_failures(
+        self, failed_ids: set[str]
+    ) -> None:
+        updated_candidates = []
+        store = CandidateStore(Path(self.config.intelligence.candidate_store_file))
+        for candidate in self.last_intelligence_candidates:
+            if candidate.candidate_id not in failed_ids:
+                updated_candidates.append(candidate)
+                continue
+            reasons = list(candidate.reason_codes)
+            if ReasonCode.PROCESSING_ERROR not in reasons:
+                reasons.append(ReasonCode.PROCESSING_ERROR)
+            updated = candidate.model_copy(
+                update={
+                    "status": CandidateStatus.PROCESSING_ERROR,
+                    "reason_codes": reasons,
+                },
+                deep=True,
+            )
+            store.record_snapshot(updated)
+            updated_candidates.append(updated)
+        self.last_intelligence_candidates = updated_candidates
+
+    def _save_intelligence_artifacts(self, run_id: str) -> dict[str, Path]:
+        archive_dir = (
+            Path(self.config.intelligence.candidate_store_file).parent / "runs"
+        )
+        export = export_candidates(
+            self.last_intelligence_candidates,
+            archive_dir,
+            run_id=run_id,
+        )
+        fetch_report = (
+            self.last_fetch_report.to_dict() if self.last_fetch_report else None
+        )
+        if fetch_report is not None and getattr(self, "entity_coverage", None):
+            fetch_report["entity_coverage"] = self.entity_coverage.model_dump(
+                mode="json"
+            )
+        usage = get_usage_snapshot()
+        report = build_intelligence_report(
+            run_id=run_id,
+            candidates=self.last_intelligence_candidates,
+            fetch_report=fetch_report,
+            ai_usage={
+                "calls": usage.total_calls,
+                "input_tokens": usage.total_input_tokens,
+                "output_tokens": usage.total_output_tokens,
+                "estimated_cost": None,
+                "cost_status": "pricing_not_configured",
+                "cache_hits": 0,
+                "degraded_calls": 0,
+                "providers": {
+                    provider: {
+                        "calls": provider_usage.calls,
+                        "input_tokens": provider_usage.input_tokens,
+                        "output_tokens": provider_usage.output_tokens,
+                    }
+                    for provider, provider_usage in usage.per_provider.items()
+                },
+            },
+            card_capacity={
+                "selected": sum(
+                    candidate.status is CandidateStatus.SELECTED
+                    for candidate in self.last_intelligence_candidates
+                ),
+                "more": sum(
+                    candidate.status is CandidateStatus.HELD
+                    and ReasonCode.HELD_BY_CAPACITY in candidate.reason_codes
+                    for candidate in self.last_intelligence_candidates
+                ),
+                "truncated": 0,
+            },
+            run_mode=self.config.intelligence.run_mode.value,
+        )
+        diagnostics_path = safe_output_path(
+            archive_dir, f"diagnostics-{run_id}.json"
+        )
+        diagnostics_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "jsonl": export.jsonl_path,
+            "html": export.html_path,
+            "diagnostics": diagnostics_path,
+        }
 
     async def select_digest_items(
         self,
@@ -1834,7 +2613,12 @@ class HorizonOrchestrator:
             f"   Re-analyzing {len(expanded)} Twitter items with reply context...\n"
         )
         ai_client = create_ai_client(self.config.ai)
-        analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
+        analyzer = ContentAnalyzer(
+            ai_client,
+            self.profiles,
+            console=self.console,
+            require_intelligence=self.config.intelligence.enabled,
+        )
         await analyzer.analyze_batch(expanded)
 
     async def enrich_items(self, items: List[ContentItem]) -> EnrichmentBatchResult:
@@ -1883,7 +2667,12 @@ class HorizonOrchestrator:
         self.console.print(f"{self.icons['ai']} Analyzing content with AI...")
 
         ai_client = create_ai_client(self.config.ai)
-        analyzer = ContentAnalyzer(ai_client, self.profiles, console=self.console)
+        analyzer = ContentAnalyzer(
+            ai_client,
+            self.profiles,
+            console=self.console,
+            require_intelligence=self.config.intelligence.enabled,
+        )
 
         analyzed = await analyzer.analyze_batch(items, checkpoint_path=checkpoint_path)
         for item in analyzed:

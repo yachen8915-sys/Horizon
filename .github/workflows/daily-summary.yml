@@ -1,19 +1,24 @@
 name: Daily Horizon Summary
-run-name: Daily Horizon Summary (${{ github.event_name == 'schedule' && 'scheduled' || inputs.run_mode }})
+run-name: Daily Horizon Summary (${{ github.event_name == 'schedule' && (github.event.schedule == '0 1 * * *' && 'morning' || 'afternoon') || inputs.run_mode }})
 
 on:
   schedule:
-    # GitHub cron uses UTC. 01:15 UTC = 09:15 Asia/Shanghai.
-    - cron: "15 1 * * *"
+    # GitHub cron uses UTC. These remain inert while the workflow is disabled.
+    - cron: "0 1 * * *"  # 09:00 Asia/Shanghai
+    - cron: "0 8 * * *"  # 16:00 Asia/Shanghai
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "运行完整日报、飞书连通性测试，或仅检查平台变化来源"
+        description: "选择来源影子、情报影子、双时段预演或旧版维护工具"
         required: true
         default: full
         type: choice
         options:
           - full
+          - source_shadow
+          - intelligence_shadow
+          - morning
+          - afternoon
           - webhook_test
           - platform_changes_smoke
 
@@ -33,12 +38,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Resolve intelligence radar mode
+        id: radar_mode
+        if: github.event_name == 'schedule' || contains(fromJSON('["source_shadow","intelligence_shadow","morning","afternoon"]'), inputs.run_mode)
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
+          REQUESTED_MODE: ${{ inputs.run_mode }}
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$SCHEDULE_EXPRESSION" = "0 1 * * *" ]; then
+              mode="morning"
+              hours="24"
+            else
+              mode="afternoon"
+              hours="7"
+            fi
+          else
+            mode="$REQUESTED_MODE"
+            hours="24"
+            if [ "$mode" = "afternoon" ]; then hours="7"; fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "hours=$hours" >> "$GITHUB_OUTPUT"
+
       - name: Check for an earlier successful daily run
         id: daily_run_gate
         if: github.event_name == 'schedule'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/check_daily_run_gate.py
+        run: python scripts/check_daily_run_gate.py --run-mode "${{ steps.radar_mode.outputs.mode }}"
 
       - name: Report duplicate daily skip
         if: github.event_name == 'schedule' && steps.daily_run_gate.outputs.should_run == 'false'
@@ -64,9 +94,76 @@ jobs:
         if: github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true'
         run: cp data/config.github.json data/config.json
 
+      - name: Restore intelligence shadow state
+        id: restore_intelligence_state
+        if: >-
+          (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') &&
+          (github.event_name == 'schedule' || contains(fromJSON('["source_shadow","intelligence_shadow","morning","afternoon"]'), inputs.run_mode))
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/candidates
+            data/shadow
+          key: intelligence-state-${{ github.run_id }}
+          restore-keys: |
+            intelligence-state-
+
+      - name: Run source-only shadow
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'source_shadow'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
+        run: uv run python scripts/run_source_shadow.py --config data/config.json --hours 24
+
+      - name: Run intelligence radar
+        if: >-
+          (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') &&
+          (github.event_name == 'schedule' || contains(fromJSON('["intelligence_shadow","morning","afternoon"]'), inputs.run_mode))
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
+          HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
+        run: >-
+          uv run horizon
+          --intelligence-run-mode ${{ steps.radar_mode.outputs.mode == 'intelligence_shadow' && 'shadow' || steps.radar_mode.outputs.mode }}
+          --hours ${{ steps.radar_mode.outputs.hours }}
+
+      - name: Save intelligence shadow state
+        if: >-
+          success() &&
+          (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') &&
+          (github.event_name == 'schedule' || contains(fromJSON('["source_shadow","intelligence_shadow","morning","afternoon"]'), inputs.run_mode)) &&
+          (hashFiles('data/candidates/**') != '' || hashFiles('data/shadow/**') != '')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/candidates
+            data/shadow
+          key: intelligence-state-${{ github.run_id }}
+
+      - name: Upload intelligence shadow artifacts
+        if: >-
+          always() &&
+          (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') &&
+          (github.event_name == 'schedule' || contains(fromJSON('["source_shadow","intelligence_shadow","morning","afternoon"]'), inputs.run_mode))
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-intelligence-shadow-${{ github.run_id }}
+          path: |
+            data/candidates/runs/*
+            data/shadow/source_health_state.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Restore platform change state
         id: restore_platform_change_state
-        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         uses: actions/cache/restore@v4
         with:
           path: data/platform_change_state.json
@@ -80,7 +177,7 @@ jobs:
 
       - name: Restore digest selection state
         id: restore_digest_selection_state
-        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         uses: actions/cache/restore@v4
         with:
           path: data/digest_selection_state.json
@@ -108,7 +205,7 @@ jobs:
         run: echo "cache-matched-key=${{ steps.restore_platform_change_state_smoke.outputs.cache-matched-key }}"
 
       - name: Run Horizon
-        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         env:
           # Map secrets to environment variables expected by config.json
           # Modify these based on your data/config.github.json provider settings
@@ -124,14 +221,14 @@ jobs:
         run: uv run horizon --hours 24
 
       - name: Save platform change state
-        if: success() && (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full') && hashFiles('data/platform_change_state.json') != ''
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full' && hashFiles('data/platform_change_state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: data/platform_change_state.json
           key: platform-change-state-${{ github.run_id }}
 
       - name: Save digest selection state
-        if: success() && (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full') && hashFiles('data/digest_selection_state.json') != ''
+        if: success() && github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full' && hashFiles('data/digest_selection_state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: data/digest_selection_state.json
@@ -148,7 +245,7 @@ jobs:
         run: uv run horizon-webhook --config data/config.github.json --lang zh
 
       - name: Upload selection diagnostics
-        if: always() && (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: horizon-selection-diagnostics-${{ github.run_id }}
@@ -157,11 +254,11 @@ jobs:
           retention-days: 14
 
       - name: Set current date as environment variable
-        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         run: echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       - name: Deploy to GitHub Pages
-        if: (github.event_name != 'schedule' || steps.daily_run_gate.outputs.should_run == 'true') && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'full'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

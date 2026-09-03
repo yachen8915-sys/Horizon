@@ -14,9 +14,32 @@ from .console_icons import get_icons
 from .logging_config import configure_logging
 from .storage.manager import ConfigError, StorageManager
 from .orchestrator import HorizonOrchestrator
+from .models import Config, RadarRunMode
 
 
 console = Console(stderr=True)
+
+
+def apply_intelligence_run_mode(
+    config: Config, run_mode: str | None
+) -> Config:
+    if run_mode is None:
+        return config
+    if not config.intelligence.enabled:
+        raise ConfigError(
+            "--intelligence-run-mode requires intelligence.enabled=true"
+        )
+    intelligence = config.intelligence.model_copy(
+        update={"run_mode": RadarRunMode(run_mode)},
+        deep=True,
+    )
+    updates = {"intelligence": intelligence}
+    if RadarRunMode(run_mode) is RadarRunMode.SHADOW:
+        updates["collection"] = config.collection.model_copy(
+            update={"source_shadow_enabled": True},
+            deep=True,
+        )
+    return config.model_copy(update=updates, deep=True)
 
 
 def print_banner():
@@ -44,6 +67,11 @@ def main():
     parser = argparse.ArgumentParser(description="Horizon - AI-Driven Information Aggregation System")
     parser.add_argument("--hours", type=int, help="Force fetch from last N hours")
     parser.add_argument("--resume-cache", help="Resume analysis from a merged Horizon cache file")
+    parser.add_argument(
+        "--intelligence-run-mode",
+        choices=[mode.value for mode in RadarRunMode],
+        help="Override the redesigned radar run mode without enabling delivery",
+    )
     add_data_dir_arguments(parser)
     add_log_level_argument(parser)
     args = parser.parse_args()
@@ -98,6 +126,10 @@ def main():
                 f"[bold red]{icons['error']} Error loading configuration: {e}[/bold red]"
             )
             sys.exit(1)
+
+        config = apply_intelligence_run_mode(
+            config, args.intelligence_run_mode
+        )
 
         icons = get_icons(config.display.icon_style)
 

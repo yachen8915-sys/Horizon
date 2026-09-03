@@ -12,6 +12,7 @@ from typing import Dict
 
 @dataclass
 class ProviderUsage:
+    calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -22,6 +23,7 @@ class ProviderUsage:
 
 @dataclass
 class TokenUsageSnapshot:
+    total_calls: int
     total_input_tokens: int
     total_output_tokens: int
     per_provider: Dict[str, ProviderUsage] = field(default_factory=dict)
@@ -42,10 +44,8 @@ def record_usage(provider: str, input_tokens: int = 0, output_tokens: int = 0) -
         input_tokens: Prompt / input tokens used.
         output_tokens: Completion / output tokens used.
     """
-    if input_tokens <= 0 and output_tokens <= 0:
-        return
-
     usage = _provider_usage.setdefault(provider, ProviderUsage())
+    usage.calls += 1
     usage.input_tokens += max(0, input_tokens)
     usage.output_tokens += max(0, output_tokens)
 
@@ -55,6 +55,7 @@ def get_usage_snapshot() -> TokenUsageSnapshot:
     total_in = sum(u.input_tokens for u in _provider_usage.values())
     total_out = sum(u.output_tokens for u in _provider_usage.values())
     return TokenUsageSnapshot(
+        total_calls=sum(u.calls for u in _provider_usage.values()),
         total_input_tokens=total_in,
         total_output_tokens=total_out,
         per_provider=dict(_provider_usage),

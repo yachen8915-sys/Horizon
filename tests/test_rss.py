@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
+import httpx
+
 from src.models import RSSSourceConfig
 from src.scrapers.rss import RSSScraper
 
@@ -94,3 +96,60 @@ def test_unknown_extractor_name_ignored() -> None:
 
     assert len(items) == 1
     assert items[0].content == "Short summary from feed."
+
+
+def test_rss_records_health_for_each_feed_instead_of_hiding_one_failure() -> None:
+    response = MagicMock()
+    response.text = _FEED
+    response.raise_for_status.return_value = None
+    client = AsyncMock()
+    client.get.side_effect = [httpx.ReadTimeout("slow feed"), response]
+    sources = [
+        RSSSourceConfig(name="Broken", url="https://example.com/broken.xml"),
+        RSSSourceConfig(
+            name="Healthy",
+            url="https://example.com/healthy.xml",
+            expected_cadence_hours=100000,
+        ),
+    ]
+    scraper = RSSScraper(sources, client)
+
+    items = asyncio.run(scraper.fetch(_SINCE))
+
+    assert len(items) == 1
+    assert [row["status"] for row in scraper.last_feed_results] == [
+        "failed",
+        "healthy",
+    ]
+    assert scraper.last_feed_results[0]["reason_code"] == "transport_error"
+    assert scraper.last_feed_results[1]["feed_name"] == "Healthy"
+
+
+def test_rss_health_detects_structurally_valid_but_stale_feed() -> None:
+    scraper = RSSScraper(
+        [
+            RSSSourceConfig(
+                name="Stale",
+                url="https://example.com/stale.xml",
+                expected_cadence_hours=24,
+                stale_after_multiplier=2,
+            )
+        ],
+        _make_feed_client(_FEED),
+    )
+
+    asyncio.run(scraper.fetch(_SINCE))
+
+    assert scraper.last_feed_results[0]["status"] == "stale"
+    assert scraper.last_feed_results[0]["reason_code"] == "stale_data"
+
+
+def test_invalid_rss_payload_is_a_schema_failure() -> None:
+    scraper = RSSScraper(
+        [RSSSourceConfig(name="HTML", url="https://example.com/not-a-feed")],
+        _make_feed_client("<html><body>not a feed</body></html>"),
+    )
+
+    assert asyncio.run(scraper.fetch(_SINCE)) == []
+    assert scraper.last_feed_results[0]["status"] == "failed"
+    assert scraper.last_feed_results[0]["reason_code"] == "schema_error"

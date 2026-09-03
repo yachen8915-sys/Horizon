@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_daily_run_gate.py"
 
 
-def run_gate(tmp_path: Path, runs: list[dict]) -> tuple[subprocess.CompletedProcess[str], str]:
+def run_gate(
+    tmp_path: Path,
+    runs: list[dict],
+    *,
+    run_mode: str = "full",
+) -> tuple[subprocess.CompletedProcess[str], str]:
     output = tmp_path / "github-output.txt"
     result = subprocess.run(
         [
@@ -26,6 +31,8 @@ def run_gate(tmp_path: Path, runs: list[dict]) -> tuple[subprocess.CompletedProc
             "2026-08-12T03:29:16Z",
             "--github-output",
             str(output),
+            "--run-mode",
+            run_mode,
         ],
         cwd=ROOT,
         capture_output=True,
@@ -102,3 +109,43 @@ def test_schedule_runs_when_only_non_daily_or_previous_beijing_day_runs_exist(
     assert result.returncode == 0, result.stderr
     assert "RUN no prior successful daily run" in result.stdout
     assert "should_run=true" in output
+
+
+def test_morning_success_does_not_suppress_afternoon_run(tmp_path: Path) -> None:
+    result, output = run_gate(
+        tmp_path,
+        [
+            {
+                "id": 100,
+                "created_at": "2026-08-12T01:00:00Z",
+                "status": "completed",
+                "conclusion": "success",
+                "event": "schedule",
+                "display_title": "Daily Horizon Summary (morning)",
+            }
+        ],
+        run_mode="afternoon",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "should_run=true" in output
+
+
+def test_same_mode_success_suppresses_duplicate_run(tmp_path: Path) -> None:
+    result, output = run_gate(
+        tmp_path,
+        [
+            {
+                "id": 100,
+                "created_at": "2026-08-12T01:00:00Z",
+                "status": "completed",
+                "conclusion": "success",
+                "event": "workflow_dispatch",
+                "display_title": "Daily Horizon Summary (morning)",
+            }
+        ],
+        run_mode="morning",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "should_run=false" in output

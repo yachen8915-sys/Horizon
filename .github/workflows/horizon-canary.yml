@@ -1,0 +1,100 @@
+name: Horizon Feishu Canary
+run-name: Horizon Feishu Canary (${{ github.event_name }})
+
+on:
+  schedule:
+    # 01:00 UTC = 09:00 Asia/Shanghai. The gate permits only 2026-09-04.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: horizon-feishu-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Gate the one-day canary
+        id: gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_DATE: "2026-09-04"
+        run: |
+          today="$(TZ=Asia/Shanghai date +%F)"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$today" = "$TARGET_DATE" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout redesign branch
+        if: steps.gate.outputs.should_run == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: codex/horizon-intelligence-redesign-plan-20260903
+
+      - name: Set up Python
+        if: steps.gate.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        if: steps.gate.outputs.should_run == 'true'
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.26"
+
+      - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
+        run: |
+          uv sync
+          uv pip install yt-dlp
+
+      - name: Require the isolated Feishu webhook
+        if: steps.gate.outputs.should_run == 'true'
+        shell: bash
+        env:
+          HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}
+        run: |
+          if [ -z "$HORIZON_CANARY_WEBHOOK_URL" ]; then
+            echo "Missing repository secret HORIZON_CANARY_WEBHOOK_URL" >&2
+            exit 1
+          fi
+
+      - name: Prepare isolated canary config
+        if: steps.gate.outputs.should_run == 'true'
+        run: >-
+          uv run python scripts/prepare_canary_config.py
+          --input data/config.github.json
+          --output data/config.canary.json
+
+      - name: Run Horizon and send only to the canary group
+        if: steps.gate.outputs.should_run == 'true'
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
+          HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}
+        run: uv run horizon --config data/config.canary.json --hours 24
+
+      - name: Upload canary diagnostics
+        if: always() && steps.gate.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-canary-${{ github.run_id }}
+          path: |
+            data/canary/runs/*
+            data/canary/source_health_state.json
+            data/summaries/*
+          if-no-files-found: warn
+          retention-days: 14

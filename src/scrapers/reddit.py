@@ -21,6 +21,7 @@ from ..models import (
     RedditUserConfig,
     SourceType,
 )
+from ..processing.source_health import SourceHealthObservation, assess_source_health
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +52,48 @@ class RedditScraper(BaseScraper):
         super().__init__(config.model_dump(), http_client)
         self.reddit_config = config
         self._comment_semaphore = asyncio.Semaphore(MAX_COMMENT_CONCURRENCY)
+        self.last_source_results: list[dict[str, Any]] = []
 
     async def fetch(self, since: datetime) -> List[ContentItem]:
         if not self.config.get("enabled", True):
             return []
 
         items = []
+        self.last_source_results = []
         for sub_cfg in self.reddit_config.subreddits:
             if sub_cfg.enabled:
+                source_items: List[ContentItem] = []
+                error: Exception | None = None
                 try:
-                    items.extend(await self._fetch_subreddit(sub_cfg, since))
-                except Exception as e:
-                    logger.warning("Error fetching Reddit source: %s", e)
+                    source_items = await self._fetch_subreddit(sub_cfg, since)
+                except Exception as exc:
+                    error = exc
+                    logger.warning("Error fetching Reddit source: %s", exc)
+                items.extend(source_items)
+                schema_error = isinstance(error, ValueError)
+                health = assess_source_health(
+                    SourceHealthObservation(
+                        source_id=f"reddit:subreddit:{sub_cfg.subreddit}",
+                        checked_at=datetime.now(timezone.utc),
+                        transport_ok=error is None or schema_error,
+                        schema_ok=error is None,
+                        error=(
+                            f"{type(error).__name__}: {error}" if error else None
+                        ),
+                        item_count=len(source_items),
+                        newest_item_at=max(
+                            (item.published_at for item in source_items),
+                            default=None,
+                        ),
+                    )
+                )
+                self.last_source_results.append(
+                    {
+                        **health.model_dump(mode="json"),
+                        "source_type": "subreddit",
+                        "subreddit": sub_cfg.subreddit,
+                    }
+                )
 
         for user_cfg in self.reddit_config.users:
             if user_cfg.enabled:
@@ -98,7 +129,11 @@ class RedditScraper(BaseScraper):
             )
             return await self._fetch_subreddit_rss(cfg, since)
         if not data:
-            return []
+            logger.warning(
+                "Reddit JSON returned no usable listing for r/%s; falling back to RSS",
+                cfg.subreddit,
+            )
+            return await self._fetch_subreddit_rss(cfg, since)
 
         posts = [
             child["data"]
@@ -120,21 +155,19 @@ class RedditScraper(BaseScraper):
     ) -> List[ContentItem]:
         rss_url = f"{REDDIT_BASE}/r/{cfg.subreddit}/{cfg.sort}/.rss"
 
-        try:
-            response = await self.client.get(
-                rss_url,
-                headers={
-                    **REDDIT_HEADERS,
-                    "Accept": "application/atom+xml,application/xml,text/xml,*/*",
-                },
-                follow_redirects=True,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            logger.warning("Reddit RSS fallback failed for r/%s: %s", cfg.subreddit, e)
-            return []
+        response = await self.client.get(
+            rss_url,
+            headers={
+                **REDDIT_HEADERS,
+                "Accept": "application/atom+xml,application/xml,text/xml,*/*",
+            },
+            follow_redirects=True,
+        )
+        response.raise_for_status()
 
         feed = feedparser.parse(response.text)
+        if not feed.entries and not feed.get("version"):
+            raise ValueError(f"invalid Reddit RSS payload for r/{cfg.subreddit}")
         items = []
         for entry in feed.entries[: cfg.fetch_limit]:
             published_at = self._parse_rss_date(entry)

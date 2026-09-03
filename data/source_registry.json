@@ -1,0 +1,357 @@
+{
+  "version": 1,
+  "requirements": [
+    {
+      "decision_lane": "product_capability",
+      "required_roles": ["confirm", "discover"],
+      "minimum_operational_sources": 2,
+      "required_source_ids": ["official-product-rss"]
+    },
+    {
+      "decision_lane": "hot_content",
+      "required_roles": ["discover"],
+      "minimum_operational_sources": 2,
+      "required_source_ids": ["x-official", "youtube-data", "reddit-community"]
+    },
+    {
+      "decision_lane": "technical_frontier",
+      "required_roles": ["confirm", "discover"],
+      "minimum_operational_sources": 2,
+      "required_source_ids": ["github-direct"]
+    },
+    {
+      "decision_lane": "platform_ai_change",
+      "required_roles": ["confirm", "discover"],
+      "minimum_operational_sources": 2,
+      "required_source_ids": ["platform-changes-official"]
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "official-product-rss",
+      "config_ref": "sources.rss[official-product]",
+      "decision_lanes": ["product_capability"],
+      "entities": ["openai", "google_ai", "microsoft_ai", "figma", "notion"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "rss",
+      "fact_ceiling": "confirmed",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "anthropic-official-news",
+      "config_ref": "sources.platform_changes[anthropic-official-news]",
+      "decision_lanes": ["product_capability", "technical_frontier"],
+      "entities": ["anthropic"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 168,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "meta-ai-official-blog",
+      "config_ref": "sources.platform_changes[meta-ai-official-blog]",
+      "decision_lanes": ["product_capability", "technical_frontier"],
+      "entities": ["meta_ai"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 336,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "xai-official-news",
+      "config_ref": "sources.platform_changes[xai-official-news]",
+      "decision_lanes": ["product_capability", "technical_frontier"],
+      "entities": ["xai"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 168,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "canva-product-news",
+      "config_ref": "sources.platform_changes[canva-product-news]",
+      "decision_lanes": ["product_capability"],
+      "entities": ["canva"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 336,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "runway-product-news",
+      "config_ref": "sources.platform_changes[runway-product-news]",
+      "decision_lanes": ["product_capability"],
+      "entities": ["runway"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 336,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "perplexity-changelog",
+      "config_ref": "sources.platform_changes[perplexity-changelog]",
+      "decision_lanes": ["product_capability"],
+      "entities": ["perplexity"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "page_diff",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 336,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "cursor-changelog",
+      "config_ref": "sources.platform_changes[cursor-changelog]",
+      "decision_lanes": ["product_capability", "technical_frontier"],
+      "entities": ["cursor"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "page_diff",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 168,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "mistral-official-news",
+      "config_ref": "sources.platform_changes[mistral-official-news]",
+      "decision_lanes": ["product_capability", "technical_frontier"],
+      "entities": ["mistral"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_index",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 168,
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "product-hunt",
+      "config_ref": "sources.rss[Product Hunt]",
+      "decision_lanes": ["product_capability", "hot_content"],
+      "role": "discover",
+      "authority": "secondary",
+      "access_method": "rss",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "creator-newsletters",
+      "config_ref": "sources.rss[overseas-ai-creator]",
+      "decision_lanes": ["product_capability", "hot_content"],
+      "entities": ["openai", "anthropic", "google_ai", "meta_ai", "xai", "microsoft_ai", "figma", "notion", "canva", "runway", "perplexity", "cursor", "mistral"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "rss",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "overseas-ai-media",
+      "config_ref": "sources.rss[overseas-ai-media]",
+      "decision_lanes": ["product_capability", "hot_content"],
+      "role": "discover",
+      "authority": "secondary",
+      "access_method": "rss",
+      "fallback_source_ids": ["google-news"],
+      "expected_cadence_hours": 24,
+      "fact_ceiling": "reported",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "youtube-rss",
+      "config_ref": "sources.rss[overseas-ai-video]",
+      "decision_lanes": ["hot_content"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "rss",
+      "lifecycle": "coverage_gap"
+    },
+    {
+      "source_id": "youtube-data",
+      "config_ref": "sources.youtube",
+      "decision_lanes": ["hot_content"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "official_api_or_local_ytdlp",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "x-official",
+      "config_ref": "sources.twitter",
+      "decision_lanes": ["product_capability", "hot_content", "technical_frontier"],
+      "entities": ["openai", "anthropic", "google_ai", "meta_ai", "xai", "microsoft_ai", "figma", "notion", "canva", "runway", "perplexity", "cursor", "mistral"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "official_api_or_local_opencli",
+      "fallback_source_ids": ["aihot", "creator-newsletters"],
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "bluesky-public",
+      "config_ref": "sources.bluesky",
+      "decision_lanes": ["hot_content", "technical_frontier"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "official_public_api",
+      "fallback_source_ids": ["hackernews", "creator-newsletters"],
+      "expected_cadence_hours": 24,
+      "fact_ceiling": "reported",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "reddit-community",
+      "config_ref": "sources.reddit",
+      "decision_lanes": ["hot_content", "technical_frontier"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "rss_or_official_api",
+      "fallback_source_ids": ["hackernews"],
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "hackernews",
+      "config_ref": "sources.hackernews",
+      "decision_lanes": ["hot_content", "technical_frontier"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "official_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "github-direct",
+      "config_ref": "sources.github",
+      "decision_lanes": ["technical_frontier"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "official_api_and_atom",
+      "fallback_source_ids": ["ossinsight", "hackernews"],
+      "fact_ceiling": "confirmed",
+      "lifecycle": "shadow"
+    },
+    {
+      "source_id": "huggingface",
+      "config_ref": "sources.huggingface",
+      "decision_lanes": ["technical_frontier"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "public_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "ossinsight",
+      "config_ref": "sources.ossinsight",
+      "decision_lanes": ["technical_frontier"],
+      "role": "backfill",
+      "authority": "aggregator",
+      "access_method": "public_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "platform-changes-official",
+      "config_ref": "sources.platform_changes",
+      "decision_lanes": ["platform_ai_change"],
+      "role": "confirm",
+      "authority": "official",
+      "access_method": "page_diff_and_public_api",
+      "fact_ceiling": "confirmed",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "platform-trends",
+      "config_ref": "sources.platform_trends",
+      "decision_lanes": ["hot_content", "platform_ai_change"],
+      "role": "discover",
+      "authority": "aggregator",
+      "access_method": "public_and_commercial_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "bilibili",
+      "config_ref": "sources.bilibili",
+      "decision_lanes": ["hot_content"],
+      "role": "discover",
+      "authority": "primary",
+      "access_method": "public_search_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "google-news",
+      "config_ref": "sources.google_news",
+      "decision_lanes": ["product_capability", "hot_content", "platform_ai_change"],
+      "role": "backfill",
+      "authority": "aggregator",
+      "access_method": "rss_search",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "openbb",
+      "config_ref": "sources.openbb",
+      "decision_lanes": ["product_capability"],
+      "role": "backfill",
+      "authority": "secondary",
+      "access_method": "sdk",
+      "lifecycle": "disabled"
+    },
+    {
+      "source_id": "gdelt",
+      "config_ref": "sources.gdelt",
+      "decision_lanes": ["product_capability", "hot_content"],
+      "role": "backfill",
+      "authority": "aggregator",
+      "access_method": "public_api",
+      "lifecycle": "disabled"
+    },
+    {
+      "source_id": "telegram",
+      "config_ref": "sources.telegram",
+      "decision_lanes": ["product_capability"],
+      "role": "backfill",
+      "authority": "secondary",
+      "access_method": "public_web_preview",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "aihot",
+      "config_ref": "sources.aihot",
+      "decision_lanes": ["product_capability", "hot_content", "technical_frontier"],
+      "role": "backfill",
+      "authority": "aggregator",
+      "access_method": "public_api",
+      "lifecycle": "active"
+    },
+    {
+      "source_id": "xiaohongshu-trends",
+      "config_ref": "sources.platform_trends[xiaohongshu]",
+      "decision_lanes": ["hot_content", "platform_ai_change"],
+      "role": "discover",
+      "authority": "aggregator",
+      "access_method": "provider_required",
+      "lifecycle": "coverage_gap"
+    },
+    {
+      "source_id": "wechat-trends",
+      "config_ref": "sources.platform_trends[wechat]",
+      "decision_lanes": ["hot_content", "platform_ai_change"],
+      "role": "discover",
+      "authority": "aggregator",
+      "access_method": "provider_required",
+      "lifecycle": "coverage_gap"
+    }
+  ]
+}

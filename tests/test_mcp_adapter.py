@@ -93,7 +93,15 @@ def test_apply_source_filter_handles_twitter_and_openbb() -> None:
                 "api_key_env": "OPENAI_API_KEY",
             },
             "sources": {
-                "twitter": {"enabled": True, "users": ["openai"]},
+                    "twitter": {"enabled": True, "users": ["openai"]},
+                    "youtube": {
+                        "enabled": True,
+                        "queries": [{"query": "AI tools"}],
+                    },
+                    "bluesky": {
+                        "enabled": True,
+                        "actors": ["simonwillison.net"],
+                    },
                 "openbb": {
                     "enabled": True,
                     "watchlists": [{"name": "ai", "symbols": ["NVDA"]}],
@@ -130,6 +138,14 @@ def test_mcp_filter_and_reporting_support_every_registered_source() -> None:
                 "reddit": {"enabled": True, "subreddits": [{"subreddit": "python"}]},
                 "telegram": {"enabled": True, "channels": [{"channel": "updates"}]},
                 "twitter": {"enabled": True, "users": ["openai"]},
+                "youtube": {
+                    "enabled": True,
+                    "queries": [{"query": "AI tools"}],
+                },
+                "bluesky": {
+                    "enabled": True,
+                    "actors": ["simonwillison.net"],
+                },
                 "openbb": {"enabled": True, "watchlists": [{"name": "tech", "symbols": ["NVDA"]}]},
                 "ossinsight": {"enabled": True},
                 "gdelt": {"enabled": True},

@@ -178,6 +178,45 @@ class PlatformChangesScraper(BaseScraper):
                     }
                 )
             except Exception as exc:
+                if watcher.fallback_query:
+                    fallback_key = f"{watcher.name}::search_fallback"
+                    fallback_watcher = watcher.model_copy(
+                        update={
+                            "mode": "search_rss",
+                            "query": watcher.fallback_query,
+                            "source_level": "secondary",
+                        },
+                        deep=True,
+                    )
+                    try:
+                        produced, updated = await self._fetch_search_rss(
+                            fallback_watcher,
+                            watcher_states.get(fallback_key),
+                        )
+                        watcher_states[fallback_key] = updated
+                        items.extend(produced)
+                        self.last_watcher_results.append(
+                            {
+                                "name": watcher.name,
+                                "mode": watcher.mode,
+                                "status": "degraded",
+                                "health_status": "degraded",
+                                "reason_code": "fallback_used",
+                                "item_count": len(produced),
+                                "content_count": self._health_content_count(
+                                    fallback_watcher, updated, produced
+                                ),
+                                "new_count": len(produced),
+                                "coverage": "search_fallback",
+                                "search_rss_fallback": True,
+                                "primary_error": str(exc),
+                            }
+                        )
+                        continue
+                    except Exception as fallback_exc:
+                        exc = RuntimeError(
+                            f"primary failed: {exc}; fallback failed: {fallback_exc}"
+                        )
                 logger.warning(
                     "Platform change watcher %s failed and was skipped: %s",
                     watcher.name,
@@ -603,7 +642,8 @@ class PlatformChangesScraper(BaseScraper):
             follow_redirects=True,
         )
         page_response.raise_for_status()
-        soup = BeautifulSoup(page_response.text or "", "html.parser")
+        page_html = self._unwrap_bilibili_ab_shell(page_response.text or "")
+        soup = BeautifulSoup(page_html, "html.parser")
         script_url = next(
             (
                 urljoin(str(watcher.url), str(script.get("src")))
@@ -637,6 +677,29 @@ class PlatformChangesScraper(BaseScraper):
             discovery_mode="bilibili_bundle_diff",
             source_url=script_url,
         )
+
+    @staticmethod
+    def _unwrap_bilibili_ab_shell(html: str) -> str:
+        """Extract the selected inner page from Bilibili's encoded A/B shell."""
+
+        match = re.search(
+            r"var\s+_AbConf\s*=\s*(\{.*?\});\s*!function",
+            html,
+            flags=re.DOTALL,
+        )
+        if not match:
+            return html
+        try:
+            config = json.loads(match.group(1))
+            versions = config.get("versions") or {}
+            base = (config.get("gray") or {}).get("base")
+            selected = versions.get(str(base)) if base is not None else None
+            if not isinstance(selected, dict) and versions:
+                selected = next(iter(versions.values()))
+            content = selected.get("content") if isinstance(selected, dict) else None
+            return unquote_plus(str(content)) if content else html
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return html
 
     def _diff_snapshot(
         self,

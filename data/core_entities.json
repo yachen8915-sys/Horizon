@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "entities": [
+    {"entity_id": "openai", "display_name": "OpenAI"},
+    {"entity_id": "anthropic", "display_name": "Anthropic / Claude"},
+    {"entity_id": "google_ai", "display_name": "Google Gemini / DeepMind"},
+    {"entity_id": "meta_ai", "display_name": "Meta AI"},
+    {"entity_id": "xai", "display_name": "xAI / Grok"},
+    {"entity_id": "microsoft_ai", "display_name": "Microsoft AI / Copilot"},
+    {"entity_id": "figma", "display_name": "Figma"},
+    {"entity_id": "notion", "display_name": "Notion"},
+    {"entity_id": "canva", "display_name": "Canva"},
+    {"entity_id": "runway", "display_name": "Runway"},
+    {"entity_id": "perplexity", "display_name": "Perplexity"},
+    {"entity_id": "cursor", "display_name": "Cursor"},
+    {"entity_id": "mistral", "display_name": "Mistral AI / Le Chat"}
+  ]
+}

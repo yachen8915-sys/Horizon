@@ -11,7 +11,11 @@ SCRIPT = ROOT / "scripts" / "trigger_daily_horizon.ps1"
 REGISTER_SCRIPT = ROOT / "scripts" / "register_windows_daily_trigger.ps1"
 
 
-def run_trigger(workflow_runs: list[dict]) -> subprocess.CompletedProcess[str]:
+def run_trigger(
+    workflow_runs: list[dict],
+    *,
+    run_mode: str = "full",
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "powershell.exe",
@@ -25,6 +29,8 @@ def run_trigger(workflow_runs: list[dict]) -> subprocess.CompletedProcess[str]:
             "2026-08-08T01:15:00Z",
             "-WorkflowRunsJson",
             json.dumps(workflow_runs),
+            "-RunMode",
+            run_mode,
         ],
         cwd=ROOT,
         capture_output=True,
@@ -37,7 +43,7 @@ def test_local_dispatcher_starts_full_run_when_no_run_exists() -> None:
     result = run_trigger([])
 
     assert result.returncode == 0
-    assert "DISPATCH full daily run" in result.stdout
+    assert "DISPATCH full radar run" in result.stdout
 
 
 def test_local_dispatcher_skips_when_today_has_a_successful_run() -> None:
@@ -55,7 +61,7 @@ def test_local_dispatcher_retries_after_a_failed_run() -> None:
     )
 
     assert result.returncode == 0
-    assert "DISPATCH full daily run" in result.stdout
+    assert "DISPATCH full radar run" in result.stdout
 
 
 def test_local_dispatcher_ignores_a_webhook_connectivity_test() -> None:
@@ -71,7 +77,7 @@ def test_local_dispatcher_ignores_a_webhook_connectivity_test() -> None:
     )
 
     assert result.returncode == 0
-    assert "DISPATCH full daily run" in result.stdout
+    assert "DISPATCH full radar run" in result.stdout
 
 
 def test_local_dispatcher_retries_a_transient_github_api_failure(tmp_path: Path) -> None:
@@ -151,7 +157,24 @@ def test_local_dispatcher_runs_without_localappdata_environment_variable() -> No
     )
 
     assert result.returncode == 0, result.stderr
-    assert "DISPATCH full daily run" in result.stdout
+    assert "DISPATCH full radar run" in result.stdout
+
+
+def test_local_dispatcher_treats_morning_and_afternoon_as_independent() -> None:
+    result = run_trigger(
+        [
+            {
+                "created_at": "2026-08-08T01:00:00Z",
+                "status": "completed",
+                "conclusion": "success",
+                "display_title": "Daily Horizon Summary (morning)",
+            }
+        ],
+        run_mode="afternoon",
+    )
+
+    assert result.returncode == 0
+    assert "DISPATCH afternoon radar run" in result.stdout
 
 
 def test_local_dispatcher_logs_an_unhandled_response_error(tmp_path: Path) -> None:
@@ -231,7 +254,7 @@ def test_local_dispatcher_checks_scheduled_and_manual_workflow_runs() -> None:
     assert "actions/workflows/$Workflow/runs?per_page=30" in script
 
 
-def test_registration_script_builds_0935_fallback_without_writing_task() -> None:
+def test_registration_script_is_safe_by_default_and_prepares_two_fallbacks() -> None:
     result = subprocess.run(
         [
             "powershell.exe",
@@ -249,8 +272,31 @@ def test_registration_script_builds_0935_fallback_without_writing_task() -> None
     )
 
     assert result.returncode == 0
-    assert "09:35 fallback" in result.stdout
-    assert "09:15 and 09:35" not in result.stdout
-    assert "including battery power" in result.stdout
-    assert "3 task-level restarts" in result.stdout
-    assert "persistent log" in result.stdout
+    assert "Pangmen Intelligence Radar Morning" in result.stdout
+    assert "09:20" in result.stdout
+    assert "Pangmen Intelligence Radar Afternoon" in result.stdout
+    assert "16:20" in result.stdout
+    assert "not registered because -Enable was not provided" in result.stdout
+
+
+def test_registration_preview_requires_enable_and_still_does_not_write() -> None:
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(REGISTER_SCRIPT),
+            "-Enable",
+            "-WhatIf",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "WOULD REGISTER" in result.stdout
+    assert "REGISTERED" not in result.stdout

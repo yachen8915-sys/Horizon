@@ -125,6 +125,8 @@ def test_pangmen_profile_accepts_user_facing_access_changes_but_not_parameter_on
     assert "免费开放" in profile.analysis_prompt
     assert "默认模型升级" in profile.analysis_prompt
     assert "纯参数" in profile.analysis_prompt
+    assert "首先帮助用户判断" in profile.analysis_prompt
+    assert "不是所有情报的硬门槛" in profile.analysis_prompt
 
 
 def test_pangmen_profile_does_not_request_demo_or_case_block():

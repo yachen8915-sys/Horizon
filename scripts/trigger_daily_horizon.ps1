@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$WhatIf,
+    [ValidateSet("full", "morning", "afternoon")]
+    [string]$RunMode = "full",
     [DateTimeOffset]$NowUtc = [DateTimeOffset]::UtcNow,
     [string]$WorkflowRunsJson,
     [string]$GhPath = "C:\Program Files\GitHub CLI\gh.exe",
@@ -111,6 +113,17 @@ try {
             if ([string]$run.display_title -match '\(webhook_test\)$') {
                 continue
             }
+            $expectedSuffixes = @("($RunMode)")
+            if ($RunMode -eq "full") {
+                $expectedSuffixes += "(scheduled)"
+            }
+            $displayTitle = [string]$run.display_title
+            if ([string]::IsNullOrWhiteSpace($displayTitle) -and $RunMode -ne "full") {
+                continue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($displayTitle) -and -not ($expectedSuffixes | Where-Object { $displayTitle -like "*$_" })) {
+                continue
+            }
             $createdAt = [DateTimeOffset]::Parse($run.created_at)
             if ([TimeZoneInfo]::ConvertTime($createdAt, $ChinaTimeZone).Date -eq $TodayInChina) {
                 $run
@@ -136,14 +149,14 @@ try {
         exit 0
     }
 
-    Write-TriggerLog "DISPATCH full daily run"
-    Write-Output "DISPATCH full daily run"
+    Write-TriggerLog "DISPATCH $RunMode radar run"
+    Write-Output "DISPATCH $RunMode radar run"
     if ($WhatIf) {
         exit 0
     }
 
     Invoke-GhWithRetry `
-        -Arguments @("workflow", "run", $Workflow, "--repo", $Repository, "--ref", "main", "-f", "run_mode=full") `
+        -Arguments @("workflow", "run", $Workflow, "--repo", $Repository, "--ref", "main", "-f", "run_mode=$RunMode") `
         -Operation "Dispatch the daily Horizon workflow" | Out-Null
     Write-TriggerLog "Dispatch accepted by GitHub"
 }

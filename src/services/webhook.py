@@ -425,20 +425,21 @@ class WebhookNotifier:
             }
         ) and profile_ids <= allowed
 
-    @staticmethod
     def _feishu_collapsible_title(
+        self,
         date: str,
         lang: str,
         topic_radar: bool,
         content_radar: bool = False,
     ) -> str:
+        title_prefix = self.config.title_prefix
         if lang == "zh" and content_radar:
-            return f"旁门每日内容雷达 · {date}"
+            return f"{title_prefix}旁门每日内容雷达 · {date}"
         if lang == "zh" and topic_radar:
-            return f"旁门AI {date} 折叠日报"
+            return f"{title_prefix}旁门AI {date} 折叠日报"
         if lang == "zh":
-            return f"Horizon {date} 折叠日报"
-        return f"Horizon {date} Collapsible Daily"
+            return f"{title_prefix}Horizon {date} 折叠日报"
+        return f"{title_prefix}Horizon {date} Collapsible Daily"
 
     def _build_feishu_collapsible_overview(
         self,

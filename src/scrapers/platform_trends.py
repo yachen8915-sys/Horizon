@@ -18,6 +18,12 @@ from ..models import (
     PlatformTrendsConfig,
     SourceType,
 )
+from ..processing.source_health import (
+    SourceHealthObservation,
+    SourceHealthResult,
+    SourceHealthStatus,
+    assess_source_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +32,19 @@ class PlatformTrendsScraper(BaseScraper):
     def __init__(self, config: PlatformTrendsConfig, http_client: httpx.AsyncClient):
         super().__init__({"platform_trends": config}, http_client)
         self.trends_config = config
+        self.last_provider_results: list[dict[str, Any]] = []
 
     async def fetch(self, since: datetime) -> list[ContentItem]:
         if not self.trends_config.enabled:
             return []
         items: list[ContentItem] = []
+        self.last_provider_results = []
         for provider in self.trends_config.providers:
             if not provider.enabled:
                 continue
             try:
-                items.extend(await self._fetch_provider(provider, since))
+                provider_items, health = await self._fetch_provider(provider, since)
+                items.extend(provider_items)
             except Exception as exc:
                 logger.warning(
                     "%s trends via %s unavailable, skipping: %s",
@@ -43,18 +52,35 @@ class PlatformTrendsScraper(BaseScraper):
                     provider.provider,
                     exc,
                 )
+                health = self._assess_provider(
+                    provider,
+                    transport_ok=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            self.last_provider_results.append(
+                {
+                    **health.model_dump(mode="json"),
+                    "platform": provider.platform,
+                    "provider": provider.provider,
+                }
+            )
         return self._merge_exact_topics(items)
 
     async def _fetch_provider(
         self,
         provider: PlatformTrendProviderConfig,
         since: datetime,
-    ) -> list[ContentItem]:
+    ) -> tuple[list[ContentItem], SourceHealthResult]:
         if provider.base_url is None:
             logger.warning(
                 "%s trend provider has no base_url, skipping", provider.platform
             )
-            return []
+            return [], SourceHealthResult(
+                source_id=self._provider_source_id(provider),
+                status=SourceHealthStatus.COVERAGE_GAP,
+                reason_code="missing_base_url",
+                detail="enabled provider has no base URL",
+            )
 
         headers: dict[str, str] = {}
         query_params = dict(provider.query_params)
@@ -67,7 +93,12 @@ class PlatformTrendsScraper(BaseScraper):
                     provider.api_key_env,
                     provider.provider,
                 )
-                return []
+                return [], SourceHealthResult(
+                    source_id=self._provider_source_id(provider),
+                    status=SourceHealthStatus.FAILED,
+                    reason_code="missing_credentials",
+                    detail=f"missing environment variable {provider.api_key_env}",
+                )
             prefix = provider.api_key_prefix.strip()
             value = f"{prefix} {api_key}".strip()
             if provider.auth_type == "query":
@@ -100,7 +131,7 @@ class PlatformTrendsScraper(BaseScraper):
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
-            return []
+            return [], self._assess_provider(provider, schema_ok=False)
         if payload.get("code") not in (None, 200):
             logger.warning(
                 "%s trends via %s returned provider code %s, skipping",
@@ -108,12 +139,17 @@ class PlatformTrendsScraper(BaseScraper):
                 provider.provider,
                 payload.get("code"),
             )
-            return []
+            return [], self._assess_provider(
+                provider,
+                business_ok=False,
+                business_code=str(payload.get("code")),
+                error=str(payload.get("message") or "provider reported failure"),
+            )
         adapter_payload = payload
         if provider.response_adapter == "alapi_tophub":
             data = payload.get("data")
             if not isinstance(data, dict):
-                return []
+                return [], self._assess_provider(provider, schema_ok=False)
             rows = data.get("list") or []
             adapter_payload = {
                 "updatedTime": data.get("last_update") or data.get("last_time")
@@ -121,7 +157,7 @@ class PlatformTrendsScraper(BaseScraper):
         else:
             rows = payload.get("items") or payload.get("data") or []
         if not isinstance(rows, list):
-            return []
+            return [], self._assess_provider(provider, schema_ok=False)
         observed_at = self._observed_at(
             adapter_payload, provider.observed_timezone
         )
@@ -137,14 +173,47 @@ class PlatformTrendsScraper(BaseScraper):
                 provider.provider,
                 observed_at.isoformat(),
             )
-            return []
+            return [], SourceHealthResult(
+                source_id=self._provider_source_id(provider),
+                status=SourceHealthStatus.STALE,
+                reason_code="stale_data",
+                detail=f"observed at {observed_at.isoformat()}",
+            )
         items = []
         limit = min(provider.fetch_limit, provider.rank_limit)
         for rank, row in enumerate(rows[:limit], start=1):
             item = self._row_to_item(row, rank, observed_at, provider)
             if item is not None:
                 items.append(item)
-        return items
+        return items, self._assess_provider(
+            provider,
+            item_count=len(items),
+            unexpected_empty=not items,
+            newest_item_at=observed_at,
+        )
+
+    @staticmethod
+    def _provider_source_id(provider: PlatformTrendProviderConfig) -> str:
+        return f"platform-trends:{provider.platform}:{provider.provider}"
+
+    def _assess_provider(
+        self,
+        provider: PlatformTrendProviderConfig,
+        **overrides: Any,
+    ) -> SourceHealthResult:
+        values: dict[str, Any] = {
+            "source_id": self._provider_source_id(provider),
+            "checked_at": datetime.now(timezone.utc),
+            "enabled": provider.enabled,
+            "transport_ok": True,
+            "schema_ok": True,
+            "business_ok": True,
+            "item_count": 0,
+            "expected_cadence_hours": 6,
+            "stale_after_multiplier": 3,
+        }
+        values.update(overrides)
+        return assess_source_health(SourceHealthObservation.model_validate(values))
 
     def _row_to_item(
         self,

@@ -27,6 +27,7 @@ def _prior_successful_daily_run(
     *,
     current_run_id: int,
     now_utc: datetime,
+    run_mode: str = "full",
 ) -> dict[str, Any] | None:
     today = now_utc.astimezone(BEIJING).date()
     for run in runs:
@@ -38,6 +39,11 @@ def _prior_successful_daily_run(
             continue
         title = str(run.get("display_title") or "")
         if title.endswith(NON_DAILY_TITLES):
+            continue
+        expected_suffixes = {f"({run_mode})"}
+        if run_mode == "full":
+            expected_suffixes.add("(scheduled)")
+        if not any(title.endswith(suffix) for suffix in expected_suffixes):
             continue
         created_at = str(run.get("created_at") or "")
         if not created_at or _parse_utc(created_at).astimezone(BEIJING).date() != today:
@@ -80,6 +86,11 @@ def main() -> None:
     parser.add_argument("--current-run-id", type=int, default=None)
     parser.add_argument("--now-utc")
     parser.add_argument("--github-output")
+    parser.add_argument(
+        "--run-mode",
+        choices=("full", "morning", "afternoon"),
+        default="full",
+    )
     args = parser.parse_args()
 
     current_run_id = args.current_run_id or int(os.environ["GITHUB_RUN_ID"])
@@ -103,6 +114,7 @@ def main() -> None:
         runs,
         current_run_id=current_run_id,
         now_utc=now_utc,
+        run_mode=args.run_mode,
     )
     output_path = Path(args.github_output or os.environ["GITHUB_OUTPUT"])
     if prior is not None:

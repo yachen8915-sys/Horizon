@@ -44,7 +44,7 @@ def test_engagement_tracker_records_first_and_24_hour_growth_without_ai(tmp_path
     assert rising.metadata["engagement_growth"]["triggered"] is True
 
 
-def test_engagement_tracker_persists_one_refresh_only(tmp_path) -> None:
+def test_engagement_tracker_keeps_rechecking_during_the_lookback(tmp_path) -> None:
     state_path = tmp_path / "engagement_snapshots.json"
     first_seen = datetime(2026, 8, 2, 0, 0, tzinfo=timezone.utc)
     EngagementTracker(state_path, refresh_after_hours=24).observe(
@@ -52,17 +52,21 @@ def test_engagement_tracker_persists_one_refresh_only(tmp_path) -> None:
     )
 
     reloaded = EngagementTracker(state_path, refresh_after_hours=24)
+    second = make_item(1500)
     assert reloaded.observe(
-        [make_item(1500)], now=first_seen + timedelta(hours=24)
+        [second], now=first_seen + timedelta(hours=24)
     ) == []
+    assert reloaded.last_refreshed_ids == {second.id}
+    third = make_item(9000)
     assert reloaded.observe(
-        [make_item(9000)], now=first_seen + timedelta(hours=48)
-    ) == []
+        [third], now=first_seen + timedelta(hours=48)
+    ) == [third]
 
     state = reloaded.load_state()
     record = state["items"]["bilibili:video:BV1trend"]
-    assert record["latest_metrics"]["views"] == 1500
-    assert record["refreshed_at"] == "2026-08-03T00:00:00+00:00"
+    assert record["latest_metrics"]["views"] == 9000
+    assert record["refreshed_at"] == "2026-08-04T00:00:00+00:00"
+    assert len(record["snapshots"]) == 3
 
 
 def test_collection_config_accepts_lightweight_24_hour_tracking() -> None:

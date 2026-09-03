@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -537,12 +538,17 @@ def test_bilibili_bundle_diff_baselines_embedded_convention_then_detects_change(
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/studio/convention/":
             assert "Mozilla" in request.headers["user-agent"]
+            inner = (
+                '<html><script defer src="//s1.hdslb.com/bfs/static/'
+                'creator-monorepo/convention/static/js/index.test.js"></script></html>'
+            )
+            shell = {
+                "versions": {"base": {"content": quote(inner)}},
+                "gray": {"base": "base"},
+            }
             return httpx.Response(
                 200,
-                text=(
-                    '<html><script defer src="//s1.hdslb.com/bfs/static/'
-                    'creator-monorepo/convention/static/js/index.test.js"></script></html>'
-                ),
+                text=f"var _AbConf = {json.dumps(shell)};!function(){{}}",
                 request=request,
             )
         return httpx.Response(200, text=bundle(), request=request)
@@ -695,6 +701,62 @@ def test_one_watcher_failure_does_not_block_another_watcher(tmp_path: Path) -> N
 
     assert len(items) == 1
     assert items[0].metadata["watcher"] == "good"
+    asyncio.run(client.aclose())
+
+
+def test_blocked_official_page_uses_search_rss_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rows = [
+        _discovery_item(
+            "baseline",
+            title="xAI 新功能上线",
+            url="https://x.ai/news/feature-one",
+            content="xAI 新功能上线",
+        )
+    ]
+
+    class StubGoogleNews:
+        def __init__(self, config, client):
+            pass
+
+        async def fetch(self, since):
+            return list(rows)
+
+    monkeypatch.setattr(
+        "src.scrapers.platform_changes.GoogleNewsScraper", StubGoogleNews
+    )
+    watcher = PlatformChangeWatcherConfig(
+        name="xai-official-news",
+        mode="index",
+        platform="xai",
+        url="https://x.ai/news",
+        fallback_query="site:x.ai/news xAI update",
+        source_level="official",
+        official_domains=["x.ai"],
+        change_types=["feature"],
+        profile="pangmen-topic-radar",
+    )
+    client = _client(lambda request: httpx.Response(403, request=request))
+    scraper = PlatformChangesScraper(
+        _config(tmp_path, watcher), client, now_provider=lambda: NOW
+    )
+
+    assert _run(scraper) == []
+    rows.append(
+        _discovery_item(
+            "new",
+            title="xAI 模型更新上线",
+            url="https://x.ai/news/feature-two",
+            content="xAI 模型更新上线",
+        )
+    )
+    items = _run(scraper)
+
+    assert [str(item.url) for item in items] == [
+        "https://x.ai/news/feature-two"
+    ]
+    assert scraper.last_watcher_results[0]["reason_code"] == "fallback_used"
     asyncio.run(client.aclose())
 
 

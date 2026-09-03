@@ -180,6 +180,41 @@ def test_one_platform_provider_failure_is_gracefully_skipped():
     assert items[0].metadata["platform"] == "douyin"
 
 
+def test_http_success_with_provider_business_error_records_failed_health():
+    client = AsyncMock()
+    client.get.return_value = _response(
+        {"code": 500, "name": "weibo", "message": "获取失败"}
+    )
+    scraper = PlatformTrendsScraper(
+        PlatformTrendsConfig(
+            enabled=True,
+            providers=[
+                PlatformTrendProviderConfig(
+                    platform="weibo",
+                    provider="dailyhotapi_public_instance",
+                    base_url="https://dailyhotapi.example/weibo",
+                    response_adapter="dailyhotapi",
+                )
+            ],
+        ),
+        client,
+    )
+
+    items = asyncio.run(scraper.fetch(SINCE))
+
+    assert items == []
+    assert scraper.last_provider_results == [
+        {
+            "source_id": "platform-trends:weibo:dailyhotapi_public_instance",
+            "status": "failed",
+            "reason_code": "business_error",
+            "detail": "500: 获取失败",
+            "platform": "weibo",
+            "provider": "dailyhotapi_public_instance",
+        }
+    ]
+
+
 def test_missing_optional_provider_key_is_skipped(monkeypatch):
     monkeypatch.delenv("XIAOHONGSHU_TREND_API_KEY", raising=False)
     client = AsyncMock()

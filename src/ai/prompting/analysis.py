@@ -14,7 +14,9 @@ ANALYSIS_RULES = f"""You are a content curator evaluating an item under the supp
 - Apply the profile's evaluation policy consistently."""
 
 
-def analysis_system_prompt(profile: LoadedProfile) -> str:
+def analysis_system_prompt(
+    profile: LoadedProfile, *, include_intelligence: bool = False
+) -> str:
     editorial_guidance = ""
     if profile.id == "pangmen-platform-trend-radar":
         output_contract = """{
@@ -85,6 +87,40 @@ engagement proves a factual assertion.
   "summary": "<one-sentence summary>",
   "tags": ["<tag>", "..."]
 }"""
+    if include_intelligence:
+        intelligence_contract = """,
+  "intelligence": {
+    "primary_lane": "product_capability|hot_content|technical_frontier|platform_ai_change",
+    "content_kind": "product_update|technical_update|hot_content|platform_change|financing|personnel|other",
+    "novelty_basis": "new_event|new_release|new_data|new_angle|ongoing_update|none",
+    "direct_impacts": ["<specific product, technical, user, or platform impact>", "..."],
+    "decision_summary": "<why this changes a decision for the Pangmen account>",
+    "content_summary": "<what happened, separated from the judgment>",
+    "evidence_status": "confirmed|corroborated|reported|unverified|disputed",
+    "claims": [
+      {
+        "text": "<one atomic factual claim supported by the supplied body>",
+        "status": "unverified",
+        "evidence_refs": []
+      }
+    ],
+    "evidence_refs": [],
+    "score": {
+      "decision_impact": <0 to 10>,
+      "audience_fit": <0 to 10>,
+      "novelty": <0 to 10>,
+      "evidence_quality": <0 to 10>,
+      "demonstrability": <0 to 10>,
+      "propagation_quality": <0 to 10>,
+      "freshness": <0 to 10>,
+      "differentiation": <0 to 10>,
+      "total": 0
+    }
+  }"""
+        stripped = output_contract.rstrip()
+        if not stripped.endswith("}"):
+            raise ValueError("analysis output contract must be a JSON object")
+        output_contract = stripped[:-1] + intelligence_contract + "\n}"
     return f"""{ANALYSIS_RULES}
 
 # Profile policy

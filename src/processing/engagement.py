@@ -1,4 +1,4 @@
-"""Lightweight first-seen and one-time 24-hour engagement snapshots."""
+"""Lightweight repeated engagement snapshots during the configured lookback."""
 
 from datetime import datetime, timedelta, timezone
 import json
@@ -23,6 +23,7 @@ class EngagementTracker:
         self.state_path = Path(state_path)
         self.refresh_after_hours = refresh_after_hours
         self.thresholds = thresholds or self.DEFAULT_THRESHOLDS
+        self.last_refreshed_ids: set[str] = set()
 
     def observe(self, items: list[ContentItem], now: datetime | None = None) -> list[ContentItem]:
         observed_at = self._as_utc(now or datetime.now(timezone.utc))
@@ -30,6 +31,7 @@ class EngagementTracker:
         records = state.setdefault("items", {})
         rising: list[ContentItem] = []
         changed = False
+        self.last_refreshed_ids = set()
 
         for item in items:
             metrics = self._metrics(item)
@@ -45,17 +47,25 @@ class EngagementTracker:
                     "initial_metrics": metrics,
                     "latest_metrics": metrics,
                     "refreshed_at": None,
+                    "snapshots": [
+                        {
+                            "observed_at": observed_at.isoformat(),
+                            "metrics": metrics,
+                        }
+                    ],
                 }
+                self._attach_observation_metadata(item, records[item.id])
                 changed = True
                 continue
 
-            if record.get("refreshed_at"):
+            last_observed_at = self._parse_datetime(
+                record.get("refreshed_at") or record.get("first_seen_at")
+            )
+            if last_observed_at is None:
                 continue
-            first_seen_at = self._parse_datetime(record.get("first_seen_at"))
-            if first_seen_at is None:
-                continue
-            due_at = first_seen_at + timedelta(hours=self.refresh_after_hours)
+            due_at = last_observed_at + timedelta(hours=self.refresh_after_hours)
             if observed_at < due_at:
+                self._attach_observation_metadata(item, record)
                 continue
 
             growth, triggered = self._calculate_growth(
@@ -65,7 +75,23 @@ class EngagementTracker:
             record["refreshed_at"] = observed_at.isoformat()
             record["growth"] = growth
             record["triggered"] = triggered
+            snapshots = record.setdefault("snapshots", [])
+            if not snapshots:
+                snapshots.append(
+                    {
+                        "observed_at": record.get("first_seen_at"),
+                        "metrics": record.get("initial_metrics") or {},
+                    }
+                )
+            snapshots.append(
+                {
+                    "observed_at": observed_at.isoformat(),
+                    "metrics": metrics,
+                }
+            )
             item.metadata["engagement_growth"] = {**growth, "triggered": triggered}
+            self._attach_observation_metadata(item, record)
+            self.last_refreshed_ids.add(item.id)
             changed = True
             if triggered:
                 rising.append(item)
@@ -73,6 +99,26 @@ class EngagementTracker:
         if changed:
             self._save_state(state)
         return rising
+
+    @staticmethod
+    def _attach_observation_metadata(
+        item: ContentItem,
+        record: dict[str, Any],
+    ) -> None:
+        snapshots = list(record.get("snapshots") or [])
+        item.metadata["first_observed_at"] = record.get("first_seen_at")
+        item.metadata["last_observed_at"] = (
+            record.get("refreshed_at") or record.get("first_seen_at")
+        )
+        item.metadata["observation_count"] = len(snapshots)
+        item.metadata["engagement_snapshots"] = [
+            {
+                "observed_at": snapshot.get("observed_at"),
+                "engagement": snapshot.get("metrics") or {},
+            }
+            for snapshot in snapshots
+            if isinstance(snapshot, dict)
+        ]
 
     def load_state(self) -> dict:
         if not self.state_path.exists():

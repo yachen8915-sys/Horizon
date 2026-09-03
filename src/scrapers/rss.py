@@ -14,6 +14,11 @@ import feedparser
 from .base import BaseScraper
 from ..extractors import ExtractorRegistry
 from ..models import ContentItem, SourceType, RSSSourceConfig
+from ..processing.source_health import (
+    SourceHealthObservation,
+    SourceHealthResult,
+    assess_source_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,7 @@ class RSSScraper(BaseScraper):
         """
         super().__init__({"sources": sources}, http_client)
         self._extractors = extractors
+        self.last_feed_results: list[dict] = []
 
     async def fetch(self, since: datetime) -> List[ContentItem]:
         """Fetch RSS feed items.
@@ -47,20 +53,27 @@ class RSSScraper(BaseScraper):
             List[ContentItem]: Fetched content items
         """
         items = []
+        self.last_feed_results = []
         sources = self.config["sources"]
 
         for source in sources:
             if not source.enabled:
                 continue
 
-            feed_items = await self._fetch_feed(source, since)
+            feed_items, health = await self._fetch_feed(source, since)
             items.extend(feed_items)
+            self.last_feed_results.append(
+                {
+                    **health.model_dump(mode="json"),
+                    "feed_name": source.name,
+                }
+            )
 
         return items
 
     async def _fetch_feed(
         self, source: RSSSourceConfig, since: datetime
-    ) -> List[ContentItem]:
+    ) -> tuple[List[ContentItem], SourceHealthResult]:
         """Fetch items from a single RSS feed.
 
         Args:
@@ -71,6 +84,7 @@ class RSSScraper(BaseScraper):
             List[ContentItem]: Feed content items
         """
         items = []
+        newest_item_at: datetime | None = None
 
         try:
             # Expand environment variables in URL (e.g. ${LWN_TOKEN})
@@ -86,10 +100,16 @@ class RSSScraper(BaseScraper):
 
             # Parse feed
             feed = feedparser.parse(response.text)
+            if not feed.entries and not feed.get("version"):
+                return [], self._assess_feed(source, schema_ok=False)
 
             for entry in feed.entries:
                 # Parse published date
                 published_at = self._parse_date(entry)
+                if published_at and (
+                    newest_item_at is None or published_at > newest_item_at
+                ):
+                    newest_item_at = published_at
                 if not published_at or published_at < since:
                     continue
 
@@ -131,10 +151,44 @@ class RSSScraper(BaseScraper):
 
         except httpx.HTTPError as e:
             logger.warning("Error fetching RSS feed %s: %s", source.name, e)
+            return [], self._assess_feed(
+                source,
+                transport_ok=False,
+                error=f"{type(e).__name__}: {e}",
+            )
         except Exception as e:
             logger.warning("Error parsing RSS feed %s: %s", source.name, e)
+            return [], self._assess_feed(
+                source,
+                schema_ok=False,
+                error=f"{type(e).__name__}: {e}",
+            )
 
-        return items
+        return items, self._assess_feed(
+            source,
+            item_count=len(items),
+            newest_item_at=newest_item_at,
+        )
+
+    def _assess_feed(
+        self,
+        source: RSSSourceConfig,
+        **overrides,
+    ) -> SourceHealthResult:
+        slug = re.sub(r"[^a-z0-9]+", "-", source.name.casefold()).strip("-")
+        values = {
+            "source_id": f"rss:{slug}",
+            "checked_at": datetime.now(timezone.utc),
+            "enabled": source.enabled,
+            "transport_ok": True,
+            "schema_ok": True,
+            "business_ok": True,
+            "item_count": 0,
+            "expected_cadence_hours": source.expected_cadence_hours,
+            "stale_after_multiplier": source.stale_after_multiplier,
+        }
+        values.update(overrides)
+        return assess_source_health(SourceHealthObservation.model_validate(values))
 
     def _parse_date(self, entry: dict) -> datetime:
         """Parse publication date from feed entry.

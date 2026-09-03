@@ -19,6 +19,7 @@ from .utils import parse_json_response
 from ..models import ClassificationResult, ContentAnalysis, ContentItem, ProcessingResult
 from ..processing.content import select_content, split_content
 from ..processing.editorial_selection import normalize_editorial_token
+from ..processing.intelligence_analysis import calculate_weighted_score
 from ..processing.profiles import ProfileRegistry
 
 DEFAULT_THROTTLE_SEC = 0.0
@@ -32,11 +33,13 @@ class ContentAnalyzer:
         ai_client: AIClient,
         profiles: ProfileRegistry,
         console: Optional[Console] = None,
+        require_intelligence: bool = False,
     ):
         self.client = ai_client
         self.profiles = profiles
         self.classifier = ContentClassifier(ai_client, profiles)
         self.console = console or Console(stderr=True)
+        self.require_intelligence = require_intelligence
 
     @staticmethod
     def _parse_json_response(response: str) -> Optional[dict]:
@@ -204,7 +207,9 @@ class ContentAnalyzer:
 
         # Get AI completion
         response = await self.client.complete(
-            system=analysis_system_prompt(profile),
+            system=analysis_system_prompt(
+                profile, include_intelligence=self.require_intelligence
+            ),
             user=user_prompt,
         )
 
@@ -215,10 +220,13 @@ class ContentAnalyzer:
         result, failure = self._validate_analysis_response(
             response,
             require_editorial=require_editorial,
+            require_intelligence=self.require_intelligence,
         )
         if result is None:
             repair_response = await self.client.complete(
-                system=analysis_system_prompt(profile),
+                system=analysis_system_prompt(
+                    profile, include_intelligence=self.require_intelligence
+                ),
                 user=(
                     user_prompt
                     + "\n\nYour previous response did not satisfy the output contract "
@@ -229,6 +237,7 @@ class ContentAnalyzer:
             result, failure = self._validate_analysis_response(
                 repair_response,
                 require_editorial=require_editorial,
+                require_intelligence=self.require_intelligence,
             )
 
         if result is None:
@@ -244,6 +253,23 @@ class ContentAnalyzer:
                     summary=item.title,
                 )
             return
+
+        if result.intelligence is not None:
+            intelligence_score = result.intelligence.score.model_copy(
+                update={
+                    "total": calculate_weighted_score(
+                        result.intelligence.primary_lane,
+                        result.intelligence.score,
+                    )
+                }
+            )
+            result = result.model_copy(
+                update={
+                    "intelligence": result.intelligence.model_copy(
+                        update={"score": intelligence_score}
+                    )
+                }
+            )
 
         if profile.id == "pangmen-platform-trend-radar":
             operations_score = (
@@ -321,6 +347,7 @@ class ContentAnalyzer:
         response: str,
         *,
         require_editorial: bool = False,
+        require_intelligence: bool = False,
     ) -> tuple[Optional[ContentAnalysis], str]:
         parsed = cls._parse_json_response(response)
         if not isinstance(parsed, dict):
@@ -333,6 +360,8 @@ class ContentAnalyzer:
             return None, f"invalid field {location or '<root>'}: {first_error['type']}"
         if result.score is None:
             return None, "score is required by the analysis contract"
+        if require_intelligence and result.intelligence is None:
+            return None, "intelligence is required by the redesigned contract"
         if require_editorial:
             for field_name in (
                 "primary_entity",

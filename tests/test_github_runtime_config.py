@@ -16,7 +16,141 @@ def test_github_runtime_config_bounds_slow_ai_analysis():
     assert config["ai"]["analysis_concurrency"] == 2
 
 
-def test_workflow_starts_daily_at_0915_and_holds_delivery_until_1000():
+def test_github_runtime_config_declares_source_registry_and_shadow_state():
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert config["collection"]["source_registry_file"] == "data/source_registry.json"
+    assert config["collection"]["core_entity_registry_file"] == "data/core_entities.json"
+    assert config["collection"]["source_health_state_file"] == (
+        "data/shadow/source_health_state.json"
+    )
+    assert config["collection"]["source_shadow_enabled"] is False
+    assert config["collection"]["engagement_tracking"]["refresh_after_hours"] == 3
+
+
+def test_github_runtime_config_defines_bluesky_as_bounded_free_shadow_source():
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    bluesky = config["sources"]["bluesky"]
+    assert bluesky["enabled"] is True
+    assert bluesky["shadow"] is True
+    assert bluesky["public_api_base_url"] == "https://public.api.bsky.app"
+    assert bluesky["max_requests_per_run"] == 5
+    assert bluesky["actors"] == [
+        "simonwillison.net",
+        "swyx.io",
+        "emollick.bsky.social",
+        "karpathy.bsky.social",
+        "replicate.com",
+    ]
+    assert len(bluesky["queries"]) == 2
+    assert all(query["enabled"] is False for query in bluesky["queries"])
+
+    policy = config["collection"]["social_engagement_quality"]["platforms"][
+        "bluesky"
+    ]
+    assert policy["primary_metric"] == "likes"
+    assert policy["minimum_sample"] == 50
+    assert policy["required_metrics"] == ["likes", "reposts", "replies", "quotes"]
+
+
+def test_github_runtime_config_enables_local_no_key_social_fallbacks():
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    twitter = config["sources"]["twitter"]
+    youtube = config["sources"]["youtube"]
+    assert twitter["local_cli_fallback_enabled"] is True
+    assert twitter["local_cli_command"] == "opencli"
+    assert youtube["local_cli_fallback_enabled"] is True
+    assert youtube["local_cli_command"] == "yt-dlp"
+    assert youtube["local_cli_concurrency"] == 2
+
+    policy = config["collection"]["social_engagement_quality"]["platforms"][
+        "twitter_opencli"
+    ]
+    assert policy["required_metrics"] == ["impressions", "likes"]
+    assert policy["minimum_complete_fields"] == 2
+
+
+def test_github_p0_sources_are_declared_as_shadow_only():
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    sources = config["sources"]["github"]
+    assert sources
+    assert all(source["shadow"] is True for source in sources)
+    assert {source["type"] for source in sources} == {
+        "repo_releases",
+        "repo_search",
+    }
+    assert sum(source["type"] == "repo_search" for source in sources) >= 2
+
+
+def test_dead_youtube_channel_feeds_are_not_treated_as_fallbacks() -> None:
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    registry = json.loads(
+        (REPOSITORY_ROOT / "data" / "source_registry.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    youtube_feeds = [
+        source
+        for source in config["sources"]["rss"]
+        if source["name"].startswith("YouTube -")
+    ]
+    youtube_registry = next(
+        source
+        for source in registry["sources"]
+        if source["source_id"] == "youtube-rss"
+    )
+
+    assert youtube_feeds
+    assert all(source["enabled"] is False for source in youtube_feeds)
+    assert youtube_registry["lifecycle"] == "coverage_gap"
+
+
+def test_overseas_editorial_feeds_are_shadowed_until_validated() -> None:
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    feeds = [
+        source
+        for source in config["sources"]["rss"]
+        if source.get("category") == "overseas-ai-media"
+    ]
+
+    assert {feed["name"] for feed in feeds} == {
+        "TechCrunch Artificial Intelligence",
+        "The Verge AI",
+        "MIT Technology Review AI",
+    }
+    assert all(feed["shadow"] is True for feed in feeds)
+
+
+def test_workflow_defines_disabled_ready_morning_and_afternoon_modes():
     workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "daily-summary.yml").read_text(
         encoding="utf-8"
     )
@@ -28,10 +162,13 @@ def test_workflow_starts_daily_at_0915_and_holds_delivery_until_1000():
     assert "workflow_dispatch:" in workflow
     assert "run-name:" in workflow
     assert "schedule:" in workflow
-    assert '- cron: "15 1 * * *"' in workflow
-    assert 'HORIZON_WEBHOOK_NOT_BEFORE_LOCAL: "10:00"' in workflow
-    assert 'HORIZON_WEBHOOK_TIMEZONE: "Asia/Shanghai"' in workflow
-    assert "github.event_name == 'schedule' || inputs.run_mode == 'full'" in workflow
+    assert '- cron: "0 1 * * *"' in workflow
+    assert '- cron: "0 8 * * *"' in workflow
+    assert "source_shadow" in workflow
+    assert "intelligence_shadow" in workflow
+    assert "--intelligence-run-mode" in workflow
+    assert "X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}" in workflow
+    assert "YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.run_mode == 'webhook_test'" in workflow
     assert "ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}" in workflow
 
@@ -53,14 +190,10 @@ def test_scheduled_workflow_gates_all_expensive_or_external_steps_after_checkout
         "Install uv",
         "Install dependencies",
         "Prepare GitHub Actions config",
-        "Restore platform change state",
-        "Restore digest selection state",
-        "Run Horizon",
-        "Save platform change state",
-        "Save digest selection state",
-        "Upload selection diagnostics",
-        "Set current date as environment variable",
-        "Deploy to GitHub Pages",
+        "Restore intelligence shadow state",
+        "Run intelligence radar",
+        "Save intelligence shadow state",
+        "Upload intelligence shadow artifacts",
     )
     fail_closed_guard = (
         "github.event_name != 'schedule' || "
@@ -243,5 +376,5 @@ def test_platform_change_radar_uses_public_watchers_and_persistent_action_state(
         "- name:", 1
     )[0]
     assert "if: success()" in save_state
-    assert "steps.daily_run_gate.outputs.should_run == 'true'" in save_state
-    assert "github.event_name == 'schedule' || inputs.run_mode == 'full'" in save_state
+    assert "github.event_name == 'workflow_dispatch'" in save_state
+    assert "inputs.run_mode == 'full'" in save_state

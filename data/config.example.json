@@ -55,6 +55,16 @@
         "repo": "uv",
         "enabled": true,
         "profile": "tech-news"
+      },
+      {
+        "type": "repo_search",
+        "query": "topic:artificial-intelligence",
+          "fetch_limit": 20,
+          "min_stars": 50,
+          "discovery_window_days": 30,
+        "shadow": true,
+        "enabled": true,
+        "profile": "tech-news"
       }
     ],
     "hackernews": {
@@ -97,6 +107,7 @@
     ],
     "reddit": {
       "enabled": true,
+      "shadow": false,
       "subreddits": [
         {
           "subreddit": "MachineLearning",
@@ -121,13 +132,66 @@
     },
     "twitter": {
       "enabled": false,
+      "mode": "official_api",
+      "shadow": true,
       "users": ["karpathy", "ylecun"],
       "fetch_limit": 10,
       "fetch_reply_text": false,
       "max_replies_per_tweet": 3,
       "max_tweets_to_expand": 10,
       "reply_min_likes": 5,
+      "official_bearer_token_env": "X_BEARER_TOKEN",
+      "official_max_requests_per_run": 3,
+      "local_cli_fallback_enabled": false,
+      "local_cli_command": "opencli",
+      "local_cli_timeout_sec": 45,
+      "official_queries": ["AI tools -is:retweet lang:en"],
       "profile": "tech-news"
+    },
+    "youtube": {
+      "enabled": false,
+      "shadow": true,
+      "api_key_env": "YOUTUBE_DATA_API_KEY",
+      "max_units_per_run": 25,
+      "local_cli_fallback_enabled": false,
+      "local_cli_command": "yt-dlp",
+      "local_cli_timeout_sec": 90,
+      "local_cli_concurrency": 2,
+      "channels": [
+        {
+          "channel_id": "UCXUPKJO5MZQN11PqgIvyuvQ",
+          "name": "Andrej Karpathy",
+          "fetch_limit": 5,
+          "category": "overseas-ai-video",
+          "profile": "tech-news"
+        }
+      ],
+      "queries": [
+        {
+          "query": "AI tools OR AI agents",
+          "fetch_limit": 10,
+          "order": "viewCount",
+          "category": "overseas-ai-video",
+          "profile": "tech-news"
+        }
+      ]
+    },
+    "bluesky": {
+      "enabled": false,
+      "shadow": true,
+      "public_api_base_url": "https://public.api.bsky.app",
+      "actors": ["simonwillison.net"],
+      "actor_fetch_limit": 10,
+      "max_requests_per_run": 3,
+      "category": "overseas-ai-community",
+      "profile": "tech-news",
+      "queries": [
+        {
+          "query": "AI agent",
+          "fetch_limit": 25,
+          "sort": "top"
+        }
+      ]
     },
     "openbb": {
       "enabled": false,
@@ -188,7 +252,25 @@
     }
   },
   "collection": {
-    "time_window_hours": 24
+    "time_window_hours": 24,
+    "source_registry_file": null,
+    "core_entity_registry_file": null,
+    "source_health_state_file": "data/shadow/source_health_state.json",
+    "source_shadow_enabled": false
+  },
+  "intelligence": {
+    "enabled": false,
+    "delivery_enabled": false,
+    "run_mode": "shadow",
+    "decision_lanes": [
+      "product_capability",
+      "hot_content",
+      "technical_frontier",
+      "platform_ai_change"
+    ],
+    "candidate_store_file": "data/candidates/candidate_ledger.jsonl",
+    "delivery_store_file": "data/candidates/delivery_ledger.jsonl",
+    "rule_version": "2026-09-03-v1"
   },
   "digest": {
     "max_items": null,
