@@ -6,6 +6,15 @@ on:
     # 23:50 UTC = 07:50 Asia/Shanghai on the next date. Start early so the card can arrive by 09:00.
     - cron: "50 23 * * *"
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: "Choose a cheap webhook check or the full canary pipeline"
+        required: true
+        default: webhook_test
+        type: choice
+        options:
+          - webhook_test
+          - full
 
 concurrency:
   group: horizon-feishu-canary
@@ -77,13 +86,26 @@ jobs:
           --output data/config.canary.json
 
       - name: Run Horizon and send only to the canary group
-        if: steps.gate.outputs.should_run == 'true'
+        if: >-
+          steps.gate.outputs.should_run == 'true' &&
+          (github.event_name == 'schedule' || inputs.run_mode == 'full')
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}
         run: uv run horizon --config data/config.canary.json --hours 24
+
+      - name: Send an isolated webhook connectivity test
+        if: >-
+          steps.gate.outputs.should_run == 'true' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.run_mode == 'webhook_test'
+        env:
+          HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}
+        run: >-
+          uv run horizon-webhook --config data/config.canary.json
+          --lang zh --delivery summary
 
       - name: Upload canary diagnostics
         if: always() && steps.gate.outputs.should_run == 'true'
@@ -93,6 +115,7 @@ jobs:
           path: |
             data/canary/runs/*
             data/canary/source_health_state.json
+            data/cache/*
             data/summaries/*
           if-no-files-found: warn
           retention-days: 14
