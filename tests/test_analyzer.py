@@ -231,6 +231,65 @@ def test_intelligence_mode_adds_decision_and_evidence_contract() -> None:
     assert '"decision_summary"' in prompt
     assert '"evidence_status"' in prompt
     assert '"propagation_quality"' in prompt
+    assert '"total"' not in prompt
+
+
+def test_intelligence_validation_normalizes_untrusted_derived_and_optional_fields() -> None:
+    response = json.dumps(
+        {
+            "score": 8,
+            "reason": "Relevant",
+            "summary": "A material AI update.",
+            "tags": ["ai"],
+            "primary_entity": "example_ai",
+            "topic_cluster": "model_update",
+            "use_case": "content_creation",
+            "content_format": "news",
+            "novelty_level": "incremental",
+            "event_key": "example_ai_update",
+            "editorial_key": "ignored",
+            "relevance_score": 8,
+            "novelty_score": 7,
+            "demonstrability_score": 6,
+            "intelligence": {
+                "primary_lane": "product_capability",
+                "content_kind": "product_update",
+                "novelty_basis": "fresh_take",
+                "direct_impacts": ["Adds a usable capability"],
+                "decision_summary": "Worth evaluating.",
+                "content_summary": "The product added a capability.",
+                "evidence_status": "reported",
+                "claims": [],
+                "evidence_refs": ["not-an-evidence-object"],
+                "score": {
+                    "decision_impact": 8,
+                    "audience_fit": 8,
+                    "novelty": 7,
+                    "evidence_quality": 6,
+                    "demonstrability": 6,
+                    "propagation_quality": 4,
+                    "freshness": 8,
+                    "differentiation": 7,
+                    "total": 42,
+                },
+            },
+        }
+    )
+
+    result, failure = ContentAnalyzer._validate_analysis_response(
+        response,
+        require_editorial=True,
+        require_intelligence=True,
+    )
+
+    assert failure == ""
+    assert result is not None
+    assert result.content_format == "opinion_news"
+    assert result.novelty_level == "evergreen_repackage"
+    assert result.intelligence is not None
+    assert result.intelligence.novelty_basis == "none"
+    assert result.intelligence.evidence_refs == []
+    assert result.intelligence.score.total == 0
 
 
 def test_intelligence_mode_rejects_legacy_only_response() -> None:

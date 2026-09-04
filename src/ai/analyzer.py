@@ -352,6 +352,7 @@ class ContentAnalyzer:
         parsed = cls._parse_json_response(response)
         if not isinstance(parsed, dict):
             return None, "response was not a JSON object"
+        cls._normalize_analysis_payload(parsed)
         try:
             result = ContentAnalysis.model_validate(parsed)
         except ValidationError as exc:
@@ -382,3 +383,59 @@ class ContentAnalyzer:
                 if getattr(result, field_name) is None:
                     return None, f"{field_name} is required by the editorial contract"
         return result, ""
+
+    @staticmethod
+    def _normalize_analysis_payload(parsed: dict) -> None:
+        """Conservatively normalize untrusted optional and derived AI fields."""
+        content_formats = {
+            "product_release",
+            "feature_update",
+            "hands_on_test",
+            "tutorial_workflow",
+            "case_study",
+            "opinion_news",
+        }
+        novelty_levels = {
+            "major_release",
+            "material_update",
+            "new_example",
+            "evergreen_repackage",
+        }
+        novelty_bases = {
+            "new_event",
+            "new_release",
+            "new_data",
+            "new_angle",
+            "ongoing_update",
+            "none",
+        }
+
+        content_format = parsed.get("content_format")
+        if content_format is not None and content_format not in content_formats:
+            parsed["content_format"] = "opinion_news"
+
+        novelty_level = parsed.get("novelty_level")
+        if novelty_level is not None and novelty_level not in novelty_levels:
+            parsed["novelty_level"] = "evergreen_repackage"
+
+        intelligence = parsed.get("intelligence")
+        if not isinstance(intelligence, dict):
+            return
+
+        novelty_basis = intelligence.get("novelty_basis")
+        if novelty_basis is not None and novelty_basis not in novelty_bases:
+            intelligence["novelty_basis"] = "none"
+
+        evidence_refs = intelligence.get("evidence_refs")
+        if isinstance(evidence_refs, list):
+            intelligence["evidence_refs"] = [
+                reference
+                for reference in evidence_refs
+                if isinstance(reference, dict)
+            ]
+        elif evidence_refs is not None:
+            intelligence["evidence_refs"] = []
+
+        score = intelligence.get("score")
+        if isinstance(score, dict):
+            score.pop("total", None)

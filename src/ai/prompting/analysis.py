@@ -113,8 +113,7 @@ engagement proves a factual assertion.
       "demonstrability": <0 to 10>,
       "propagation_quality": <0 to 10>,
       "freshness": <0 to 10>,
-      "differentiation": <0 to 10>,
-      "total": 0
+      "differentiation": <0 to 10>
     }
   }"""
         stripped = output_contract.rstrip()
