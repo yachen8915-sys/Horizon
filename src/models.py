@@ -1203,6 +1203,7 @@ class IntelligenceRadarConfig(BaseModel):
 
     enabled: bool = False
     delivery_enabled: bool = False
+    canary_mode: bool = False
     run_mode: RadarRunMode = RadarRunMode.SHADOW
     decision_lanes: List[DecisionLane] = Field(
         default_factory=lambda: list(DecisionLane)
@@ -1220,6 +1221,8 @@ class IntelligenceRadarConfig(BaseModel):
             raise ValueError(
                 "intelligence delivery cannot be enabled in shadow mode"
             )
+        if self.canary_mode and not self.delivery_enabled:
+            raise ValueError("intelligence canary mode requires delivery to be enabled")
         return self
 
     @field_validator("candidate_store_file", "delivery_store_file")

@@ -438,10 +438,24 @@ class HorizonOrchestrator:
         self.source_coverage: CoverageReport | None = None
         self.core_entity_registry: CoreEntityRegistry | None = None
         self.entity_coverage: EntityCoverageReport | None = None
+        canary_intelligence = bool(
+            config.intelligence.enabled
+            and config.intelligence.delivery_enabled
+            and config.intelligence.canary_mode
+        )
+        if canary_intelligence and (
+            not config.webhook
+            or not config.webhook.enabled
+            or config.webhook.url_env != "HORIZON_CANARY_WEBHOOK_URL"
+        ):
+            raise ValueError(
+                "intelligence canary mode requires the isolated canary webhook"
+            )
         if config.collection.source_registry_file:
             production_intelligence = bool(
                 config.intelligence.enabled
                 and config.intelligence.delivery_enabled
+                and not canary_intelligence
             )
             self.source_registry = SourceRegistry.load(
                 Path(config.collection.source_registry_file)

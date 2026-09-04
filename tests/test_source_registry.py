@@ -20,6 +20,7 @@ from src.models import (
     IntelligenceRadarConfig,
     RadarRunMode,
     SourcesConfig,
+    WebhookConfig,
 )
 from src.orchestrator import HorizonOrchestrator
 
@@ -287,4 +288,62 @@ def test_orchestrator_blocks_delivery_while_sources_are_still_shadow() -> None:
     )
 
     with pytest.raises(ValueError, match="production source coverage gate failed"):
+        HorizonOrchestrator(config, object())  # type: ignore[arg-type]
+
+
+def test_orchestrator_allows_shadow_sources_only_for_isolated_canary() -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="openai",
+            model="test",
+            api_key_env="TEST_API_KEY",
+            languages=[],
+        ),
+        sources=SourcesConfig(),
+        collection=CollectionConfig(
+            source_registry_file="data/source_registry.json",
+            core_entity_registry_file="data/core_entities.json",
+        ),
+        intelligence=IntelligenceRadarConfig(
+            enabled=True,
+            delivery_enabled=True,
+            canary_mode=True,
+            run_mode=RadarRunMode.MORNING,
+        ),
+        webhook=WebhookConfig(
+            enabled=True,
+            url_env="HORIZON_CANARY_WEBHOOK_URL",
+        ),
+    )
+
+    orchestrator = HorizonOrchestrator(config, object())  # type: ignore[arg-type]
+
+    assert orchestrator.source_coverage is not None
+    assert orchestrator.source_coverage.ready is True
+    assert orchestrator.entity_coverage is not None
+    assert orchestrator.entity_coverage.ready is True
+
+
+def test_orchestrator_rejects_canary_mode_with_production_webhook() -> None:
+    config = Config(
+        ai=AIConfig(
+            provider="openai",
+            model="test",
+            api_key_env="TEST_API_KEY",
+            languages=[],
+        ),
+        sources=SourcesConfig(),
+        intelligence=IntelligenceRadarConfig(
+            enabled=True,
+            delivery_enabled=True,
+            canary_mode=True,
+            run_mode=RadarRunMode.MORNING,
+        ),
+        webhook=WebhookConfig(
+            enabled=True,
+            url_env="HORIZON_WEBHOOK_URL",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="isolated canary webhook"):
         HorizonOrchestrator(config, object())  # type: ignore[arg-type]

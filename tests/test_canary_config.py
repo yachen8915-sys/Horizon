@@ -24,6 +24,7 @@ def test_canary_config_enables_delivery_only_with_isolated_state() -> None:
     assert config["intelligence"] == {
         **_runtime_config()["intelligence"],
         "delivery_enabled": True,
+        "canary_mode": True,
         "run_mode": "morning",
         "candidate_store_file": "data/canary/candidate_ledger.jsonl",
         "delivery_store_file": "data/canary/delivery_ledger.jsonl",

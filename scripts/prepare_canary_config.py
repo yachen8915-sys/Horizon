@@ -19,6 +19,7 @@ def build_canary_config(source: dict) -> dict:
     intelligence.update(
         {
             "delivery_enabled": True,
+            "canary_mode": True,
             "run_mode": "morning",
             "candidate_store_file": "data/canary/candidate_ledger.jsonl",
             "delivery_store_file": "data/canary/delivery_ledger.jsonl",
