@@ -92,6 +92,8 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
     assert "HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}" not in workflow
     assert "python scripts/prepare_canary_config.py" in workflow
     assert "uv run horizon --config data/config.canary.json --hours 24" in workflow
+    assert '--resume-cache "$checkpoint"' in workflow
+    assert "retrying once from checkpoint" in workflow
     assert "uv run horizon-webhook --config data/config.canary.json" in workflow
     assert "inputs.run_mode == 'webhook_test'" in workflow
     assert "data/cache/*" in workflow

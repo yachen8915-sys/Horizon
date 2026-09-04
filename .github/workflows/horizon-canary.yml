@@ -94,7 +94,24 @@ jobs:
           ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}
-        run: uv run horizon --config data/config.canary.json --hours 24
+        shell: bash
+        run: |
+          set +e
+          uv run horizon --config data/config.canary.json --hours 24
+          first_status=$?
+          set -e
+          if [ "$first_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          checkpoint="$(find data/cache -type f -name 'horizon-analysis-*.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [ -z "$checkpoint" ]; then
+            echo "Full canary failed before an analysis checkpoint was available." >&2
+            exit "$first_status"
+          fi
+
+          echo "Full canary failed; retrying once from checkpoint: $checkpoint"
+          uv run horizon --config data/config.canary.json --resume-cache "$checkpoint"
 
       - name: Send an isolated webhook connectivity test
         if: >-
