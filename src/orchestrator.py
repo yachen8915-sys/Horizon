@@ -774,8 +774,6 @@ class HorizonOrchestrator:
 
                 # Copy to docs/ for GitHub Pages
                 try:
-                    from pathlib import Path
-
                     post_filename = f"{today}-summary-{lang}.md"
                     posts_dir = Path("docs/_posts")
                     posts_dir.mkdir(parents=True, exist_ok=True)

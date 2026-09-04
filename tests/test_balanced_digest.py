@@ -28,6 +28,10 @@ from src.processing import ProfileRegistry
 from src.processing.editorial_selection import EditorialSelector
 
 
+def test_run_does_not_shadow_module_path_import() -> None:
+    assert "Path" not in HorizonOrchestrator.run.__code__.co_varnames
+
+
 def make_item(
     item_id: str,
     score: float,
