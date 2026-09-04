@@ -253,7 +253,7 @@ def test_intelligence_validation_normalizes_untrusted_derived_and_optional_field
             "demonstrability_score": 6,
             "intelligence": {
                 "primary_lane": "product_capability",
-                "content_kind": "product_update",
+                "content_kind": "case_study",
                 "novelty_basis": "fresh_take",
                 "direct_impacts": ["Adds a usable capability"],
                 "decision_summary": "Worth evaluating.",
@@ -287,6 +287,7 @@ def test_intelligence_validation_normalizes_untrusted_derived_and_optional_field
     assert result.content_format == "opinion_news"
     assert result.novelty_level == "evergreen_repackage"
     assert result.intelligence is not None
+    assert result.intelligence.content_kind == "other"
     assert result.intelligence.novelty_basis == "none"
     assert result.intelligence.evidence_refs == []
     assert result.intelligence.score.total == 0

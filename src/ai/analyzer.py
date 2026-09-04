@@ -409,6 +409,15 @@ class ContentAnalyzer:
             "ongoing_update",
             "none",
         }
+        content_kinds = {
+            "product_update",
+            "technical_update",
+            "hot_content",
+            "platform_change",
+            "financing",
+            "personnel",
+            "other",
+        }
 
         content_format = parsed.get("content_format")
         if content_format is not None and content_format not in content_formats:
@@ -421,6 +430,10 @@ class ContentAnalyzer:
         intelligence = parsed.get("intelligence")
         if not isinstance(intelligence, dict):
             return
+
+        content_kind = intelligence.get("content_kind")
+        if content_kind is not None and content_kind not in content_kinds:
+            intelligence["content_kind"] = "other"
 
         novelty_basis = intelligence.get("novelty_basis")
         if novelty_basis is not None and novelty_basis not in novelty_bases:

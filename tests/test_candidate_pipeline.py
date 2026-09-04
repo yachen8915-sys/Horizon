@@ -104,6 +104,19 @@ def test_missing_intelligence_is_processing_error_not_quality_rejection() -> Non
     assert candidate.reason_codes == [ReasonCode.ANALYSIS_FAILED]
 
 
+def test_invalid_intelligence_enum_is_isolated_as_processing_error() -> None:
+    item = _item()
+    assert item.processing is not None
+    assert item.processing.analysis is not None
+    assert item.processing.analysis.intelligence is not None
+    item.processing.analysis.intelligence.content_kind = "case_study"
+
+    candidate = CandidateBuilder("v1").from_analyzed_item(item)
+
+    assert candidate.status is CandidateStatus.PROCESSING_ERROR
+    assert candidate.reason_codes == [ReasonCode.ANALYSIS_FAILED]
+
+
 def test_social_observation_can_be_recorded_before_ai() -> None:
     item = _item(with_intelligence=False)
     item.processing = None

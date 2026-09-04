@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from pydantic import ValidationError
+
 from ..models import (
     CandidateRecord,
     CandidateStatus,
@@ -94,18 +96,25 @@ class CandidateBuilder:
             deep=True,
         )
 
-        draft = IntelligenceDraft(
-            primary_lane=intelligence.primary_lane,
-            content_kind=intelligence.content_kind,
-            novelty_basis=intelligence.novelty_basis,
-            direct_impacts=intelligence.direct_impacts,
-            decision_summary=intelligence.decision_summary,
-            content_summary=intelligence.content_summary,
-            evidence_status=intelligence.evidence_status,
-            dimensions=intelligence.score,
-            claims=intelligence.claims,
-            evidence_refs=intelligence.evidence_refs,
-        )
+        try:
+            draft = IntelligenceDraft(
+                primary_lane=intelligence.primary_lane,
+                content_kind=intelligence.content_kind,
+                novelty_basis=intelligence.novelty_basis,
+                direct_impacts=intelligence.direct_impacts,
+                decision_summary=intelligence.decision_summary,
+                content_summary=intelligence.content_summary,
+                evidence_status=intelligence.evidence_status,
+                dimensions=intelligence.score,
+                claims=intelligence.claims,
+                evidence_refs=intelligence.evidence_refs,
+            )
+        except ValidationError:
+            return self._base_candidate(
+                item,
+                status=CandidateStatus.PROCESSING_ERROR,
+                reason_codes=[ReasonCode.ANALYSIS_FAILED],
+            )
         gate = assess_hard_gates(draft)
         if gate.accepted:
             status = CandidateStatus.ELIGIBLE

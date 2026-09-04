@@ -92,6 +92,9 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
     assert "HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}" not in workflow
     assert "python scripts/prepare_canary_config.py" in workflow
     assert "uv run horizon --config data/config.canary.json --hours 24" in workflow
+    assert "uv run horizon-webhook --config data/config.canary.json" in workflow
+    assert "inputs.run_mode == 'webhook_test'" in workflow
+    assert "data/cache/*" in workflow
     assert "codex/horizon-intelligence-redesign-plan-20260903" in workflow
     assert "contents: read" in workflow
     assert "contents: write" not in workflow
