@@ -11,7 +11,7 @@
       "decision_lane": "hot_content",
       "required_roles": ["discover"],
       "minimum_operational_sources": 2,
-      "required_source_ids": ["x-official", "youtube-data", "reddit-community"]
+      "required_source_ids": ["aihot", "youtube-rss", "reddit-community"]
     },
     {
       "decision_lane": "technical_frontier",
@@ -180,7 +180,9 @@
       "role": "discover",
       "authority": "primary",
       "access_method": "rss",
-      "lifecycle": "coverage_gap"
+      "expected_cadence_hours": 24,
+      "fact_ceiling": "reported",
+      "lifecycle": "shadow"
     },
     {
       "source_id": "youtube-data",
@@ -200,7 +202,7 @@
       "authority": "primary",
       "access_method": "official_api_or_local_opencli",
       "fallback_source_ids": ["aihot", "creator-newsletters"],
-      "lifecycle": "shadow"
+      "lifecycle": "disabled"
     },
     {
       "source_id": "bluesky-public",

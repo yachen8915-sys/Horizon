@@ -5,7 +5,7 @@
 - 工作分支基于 `907395b`，所有改动位于独立 worktree。
 - `intelligence.enabled=true`，但 `delivery_enabled=false` 且 `run_mode=shadow`。
 - GitHub Daily Summary workflow 与 Windows `Pangmen Daily Radar` 继续禁用。
-- 工作流文件已定义 09:00/16:00 两个模式，但远端 workflow 仍为 `disabled_manually`；本地注册脚本默认只输出准备结果，缺少 `-Enable` 时不会创建任务。
+- 工作流文件已定义上午/下午两个模式；上午任务 07:50 启动并以 09:00 前送达为目标，下午仍为 16:00 启动。远端 workflow 仍为 `disabled_manually`；本地注册脚本默认只输出准备结果，缺少 `-Enable` 时不会创建任务。
 - 本手册中的上线步骤只用于后续执行；没有用户明确确认时不得 Commit、Push、启用任务、调用真实 AI 或发送飞书。
 
 ## 1. 来源稳定性先行
@@ -31,24 +31,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register_windows_sou
 
 该任务使用交互式用户会话，以便 OpenCLI 复用浏览器登录态；若电脑未登录、浏览器登录失效或机器未能唤醒，验收记录会显示缺跑或 `fallback_unavailable`，不能补写成成功。
 
-云端 GitHub Actions 路线需要补齐的运行时凭据：
+当前 GitHub Actions 路线不要求 `YOUTUBE_DATA_API_KEY` 或 `X_BEARER_TOKEN`：
 
-- `YOUTUBE_DATA_API_KEY`：4 个重点频道 uploads playlist、2 条主题搜索与互动统计；缺失时明确记为 `missing_credentials`。
-- `X_BEARER_TOKEN`：19 个重点账号合并查询 + 2 条主题查询；缺失时明确记为 `missing_credentials`。
+- YouTube：4 个重点频道 RSS 负责无密钥发现，匿名 `yt-dlp` 负责重点频道、有限主题搜索和传播数据；页面结构变化或限流必须记为 `degraded/fallback_unavailable`。
+- X：不再直采；AI HOT 中的 X 条目按原始链接和原始作者建立身份，AI HOT 只承担发现，不能作为独立事实证据。
+- Smol AI News：作为 shadow 编辑精选 RSS 补充海外 AI 社交与工程圈信号，事实状态最高为 `reported`。
 
-本地低成本路线不强制要求上述凭据：YouTube 缺 Key 时用匿名 `yt-dlp`；X 缺 Token 时用 OpenCLI 复用本机浏览器登录态。两条链路都记为 `degraded/fallback_used`，不能冒充官方 API 健康；OpenCLI 登录失效、命令缺失或页面结构变化会转成 `failed/fallback_unavailable`。本地影子通过 7 天门后，才允许把它作为本机生产路线申请启用。
+YouTube RSS 与 `yt-dlp` 通过来源影子门后，才允许晋级为生产链路；官方 API 适配器保留为未来可选增强，不是当前上线条件。
 
-Bluesky 不需要凭据，当前限定为 5 个已实测可用的公开作者流。匿名 `searchPosts` 在真实环境返回 403，相关查询保持显式 `disabled`；它是免费的补充信号，不替代 X/YouTube 的生产门禁。
+Bluesky 不需要凭据，当前限定为 5 个已实测可用的公开作者流。匿名 `searchPosts` 在真实环境返回 403，相关查询保持显式 `disabled`；它是免费的补充信号，不替代 AI HOT、YouTube RSS 和 Reddit 的生产门禁。
 
 来源验收至少覆盖连续 7 个自然日，并使用每天最后一次运行计算。必须人工检查：
 
 - 四个决策分类均有发现源，核心产品实体同时具备确认源和发现源；
 - 关键官方源不能连续失败两天；主页面受限时必须显示 `degraded/fallback_used`，不能伪装健康；
-- X、YouTube 等付费或配额型来源的失败、限流和成本可见；
+- AI HOT、YouTube RSS、`yt-dlp` 和 Reddit 的失败、限流、字段缺失和成本可见；
 - 重复率、独特候选率、新增率没有异常跳变；
 - 任何 `failed` 都能追溯到来源、原因码和缺口起点。
 
-当前一次真实影子结果仅代表连通性，不构成 7 天稳定性验收：2026-09-03 13:04 的最新一次为 122 条、122 个唯一项，健康 32、降级 12、禁用 2、失败 0，开放来源缺口为 0。X OpenCLI 贡献 30 条，YouTube `yt-dlp` 贡献 21 条近期视频；9 个 X/YouTube 子来源均成功使用本地备用。YouTube 本地主题搜索已加入 `after:日期` 约束，避免默认相关性搜索返回旧视频后被时效门槛全部丢弃；X 查询同时排除转推和回复，减少对话噪声。该轮已经同时生成可搜索 HTML 和原始 JSONL 候选快照，7 天后可检查内容质量而不只看健康计数。规则预判结果为 61 条非社交来源继续处理、11 条社交内容通过、25 条观察、25 条低传播淘汰，这些门槛在 AI 调用前执行。B站社区公约的 A/B 壳页面结构已适配并在真实请求中恢复 `healthy`。`degraded` 表示备用链路接管成功，不等于主链路健康；7 天期间必须重点观察浏览器登录态、CLI 版本和页面结构变化。
+2026-09-03 13:04 的一次真实影子结果仅代表旧配置的连通性，不构成新方案的稳定性验收：当时为 122 条、122 个唯一项，YouTube `yt-dlp` 贡献 21 条近期视频。随后用户决定取消 X 直采，并启用恢复可达的 4 个 YouTube RSS 与 Smol AI News；因此后续 7 天统计必须建立新基线，不能把旧轮次的 X 数量和健康状态计入当前方案结论。YouTube 本地主题搜索继续使用日期约束，候选快照继续保存 HTML、JSONL 和传播门槛预判。
 
 ## 2. 三天编辑质量影子
 

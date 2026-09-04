@@ -18,9 +18,9 @@
 
 ## 2026-09-03 实施检查点
 
-已完成：Task 0 的来源代码与单日真实 source-only shadow；Task 1–12 的新领域模型、候选账本、身份/证据/重复观测/评分/选择、上午/下午投递语义、本地候选档案、diagnostics，以及旧分支关键行为的选择性迁移；Task 13 的 workflow 模式、双时段定义、同模式防重、本地安全回退注册脚本和验收汇总工具也已实现。来源层当前登记 31 个来源家族和 13 个海外核心实体；失效的 4 个 YouTube RSS 已停用，YouTube 已改为重点频道 uploads playlist + 主题搜索，X 已加入 19 个重点账号合并查询，另新增 3 个海外行业媒体 shadow RSS 和 5 个免费 Bluesky 公开作者流。Bluesky 匿名搜索因实跑 403 已显式禁用，不能伪装成可用备用。X/YouTube 已增加官方 API 优先、本地 OpenCLI/`yt-dlp` 降级链路；YouTube 本地主题搜索进一步加入日期约束，X 查询排除转推和回复，最新无凭据实跑得到 122 条唯一候选、0 重复、0 失败、0 开放缺口，其中 YouTube 从修复前 1 条提升到 21 条近期视频。source-only 运行现在同时保存可搜索 HTML 与原始 JSONL 候选快照，并执行不调用 AI 的传播门槛预判，7 天后可直接审查来源内容质量和淘汰原因。生产门禁仍点名要求 X、YouTube、Reddit 和 GitHub Direct，不允许 Bluesky 或聚合源替代凑数。840 项测试、编译、配置与注册表校验、workflow YAML 结构和 diff 检查通过；YAML 仅保留 GitHub Actions `on` 键的已知 truthy 提示。
+已完成：Task 0 的来源代码与单日真实 source-only shadow；Task 1–12 的新领域模型、候选账本、身份/证据/重复观测/评分/选择、上午/下午投递语义、本地候选档案、diagnostics，以及旧分支关键行为的选择性迁移；Task 13 的 workflow 模式、双时段定义、同模式防重、本地安全回退注册脚本和验收汇总工具也已实现。来源层当前登记 31 个来源家族和 13 个海外核心实体。2026-09-03 重新实测原有 4 个 YouTube 频道 RSS 均恢复 HTTP 200，现已作为 shadow 发现链路重新启用，并新增 Smol AI News RSS；YouTube 使用频道 RSS与匿名 `yt-dlp` 的重点频道/有限主题搜索补充传播数据。按用户最新决定，X 直采已从运行配置与生产门禁移除，X 等跨平台线索由 AI HOT 承担并按原始链接/作者去重。Bluesky 匿名搜索因实跑 403 继续保持显式禁用。source-only 运行仍保存可搜索 HTML、原始 JSONL 和传播门槛预判；生产门禁改为要求 AI HOT、YouTube RSS、Reddit 和 GitHub Direct，不要求 X 或 YouTube 官方凭据。
 
-仍属上线门禁而非代码缺口：连续 7 个自然日来源 shadow、连续 3 天真实 AI 编辑质量 shadow、测试 webhook/本地卡片验收、云端 smoke、Commit/Push 与调度启用。若最终选择 GitHub Actions 云端路线，仍需 X/YouTube 运行时凭据；若选择本地低成本路线，则先以 OpenCLI/`yt-dlp` 完成 7 天稳定性验收。08:30/15:30 的独立纯来源 Windows 任务模板已准备好，默认不注册，必须显式 `-Enable`。上述步骤均未获得生产授权，因此 workflow、Windows 任务、真实 AI 和飞书保持禁用。具体执行与回滚见 `docs/runbooks/horizon-intelligence-radar-rollout.md`。
+仍属上线门禁而非代码缺口：连续 7 个自然日来源 shadow、连续 3 天真实 AI 编辑质量 shadow、测试 webhook/本地卡片验收、云端 smoke、Commit/Push 与调度启用。GitHub Actions 路线不再要求 X/YouTube 运行时凭据；YouTube RSS 与匿名 `yt-dlp` 必须通过稳定性验收，失败时明确进入观察或来源降级。08:30/15:30 的独立纯来源 Windows 任务模板已准备好，默认不注册，必须显式 `-Enable`。生产 workflow、Windows 任务和生产飞书仍保持禁用。具体执行与回滚见 `docs/runbooks/horizon-intelligence-radar-rollout.md`。
 
 ---
 
@@ -35,7 +35,7 @@
 - Test: `tests/test_source_health.py`
 
 - [x] 1. 将全部现有来源登记为 `confirm/discover/backfill`，记录决策分类、权威等级、主备关系、更新频率、字段契约、增量水位、成本和事实状态上限；用测试锁定空 GitHub、关闭 X/Reddit、失效 YouTube feed 和逻辑错误热榜等已知缺口。
-- [x] 2. 补齐 P0 来源：核心 AI 产品官方源、X 官方 API 小规模账号/主题查询、YouTube uploads playlist 加 `videos.list` 统计、GitHub Releases/Search 双通道和少量 Reddit 社区；所有付费源默认 shadow 且有预算上限。
+- [x] 2. 补齐 P0 来源：核心 AI 产品官方源、AI HOT 跨平台线索、YouTube 频道 RSS 加匿名 `yt-dlp` 传播数据、GitHub Releases/Search 双通道和少量 Reddit 社区；X/YouTube 官方适配器代码保留但不作为当前运行依赖。
 - [x] 3. 实现来源健康状态 `healthy/stale/degraded/failed/disabled/coverage_gap`，同时验证 HTTP、schema、业务码、数据新鲜度和异常空结果；主来源失败时只切换已登记的备用链路。
 - [ ] 4. 实现每源增量 watermark、重试和缺口补采；启动连续 7 天 source-only shadow，记录独特候选率、重复率、正文成功率、最终入选率和单位入选成本。
 - [x] 5. 运行 `uv run pytest tests/test_source_registry.py tests/test_source_health.py tests/test_fetch_reporting.py -q`；四类决策的来源设计、字段契约和已知缺口明确后可开始 Task 1，生产启用仍须等待 7 天来源结果。

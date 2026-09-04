@@ -21,6 +21,19 @@ _FEED = """<?xml version="1.0" encoding="UTF-8" ?>
   </item>
 </channel></rss>
 """
+_YOUTUBE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>YouTube channel</title>
+  <entry>
+    <id>yt:video:video-1</id>
+    <yt:videoId>video-1</yt:videoId>
+    <title>New AI video</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=video-1"/>
+    <published>2026-04-24T12:00:00+00:00</published>
+  </entry>
+</feed>
+"""
 _SINCE = datetime(2026, 4, 24, 0, 0, tzinfo=timezone.utc)
 
 
@@ -47,6 +60,23 @@ def test_rss_ids_are_deterministic() -> None:
     assert first == second
     assert first == "rss:example.com_feed.xml:5e2d5d1e58e94d76"
     assert first_item.profile == "rss-profile"
+
+
+def test_youtube_rss_marks_video_for_native_engagement_enrichment() -> None:
+    source = RSSSourceConfig(
+        name="YouTube - Test",
+        url="https://www.youtube.com/feeds/videos.xml?channel_id=channel-1",
+        category="overseas-ai-video",
+        profile="pangmen-topic-radar",
+    )
+    scraper = RSSScraper([source], _make_feed_client(_YOUTUBE_FEED))
+
+    [item] = asyncio.run(scraper.fetch(_SINCE))
+
+    assert item.metadata["content_platform"] == "youtube"
+    assert item.metadata["quality_platform"] == "youtube"
+    assert item.metadata["engagement_pending"] is True
+    assert item.metadata["source_level"] == "primary"
 
 
 def _make_registry(name: str, extractor):

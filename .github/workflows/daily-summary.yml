@@ -1,10 +1,10 @@
 name: Daily Horizon Summary
-run-name: Daily Horizon Summary (${{ github.event_name == 'schedule' && (github.event.schedule == '0 1 * * *' && 'morning' || 'afternoon') || inputs.run_mode }})
+run-name: Daily Horizon Summary (${{ github.event_name == 'schedule' && (github.event.schedule == '50 23 * * *' && 'morning' || 'afternoon') || inputs.run_mode }})
 
 on:
   schedule:
     # GitHub cron uses UTC. These remain inert while the workflow is disabled.
-    - cron: "0 1 * * *"  # 09:00 Asia/Shanghai
+    - cron: "50 23 * * *"  # 07:50 Asia/Shanghai, start early for delivery by 09:00
     - cron: "0 8 * * *"  # 16:00 Asia/Shanghai
   workflow_dispatch:
     inputs:
@@ -48,7 +48,7 @@ jobs:
           REQUESTED_MODE: ${{ inputs.run_mode }}
         run: |
           if [ "$EVENT_NAME" = "schedule" ]; then
-            if [ "$SCHEDULE_EXPRESSION" = "0 1 * * *" ]; then
+            if [ "$SCHEDULE_EXPRESSION" = "50 23 * * *" ]; then
               mode="morning"
               hours="24"
             else
@@ -112,8 +112,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'source_shadow'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
-          YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
         run: uv run python scripts/run_source_shadow.py --config data/config.json --hours 24
 
       - name: Run intelligence radar
@@ -126,8 +124,6 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}
-          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
-          YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}
           HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}
         run: >-
           uv run horizon

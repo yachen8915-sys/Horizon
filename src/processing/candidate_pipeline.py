@@ -44,7 +44,11 @@ class CandidateBuilder:
         gate_reason = str(item.metadata.get("engagement_gate_reason") or "")
         if gate_status == "observing":
             status = CandidateStatus.OBSERVING
-            reasons = [ReasonCode.IMMATURE]
+            reasons = [
+                ReasonCode.INCOMPLETE_ENGAGEMENT
+                if gate_reason == "engagement_pending"
+                else ReasonCode.IMMATURE
+            ]
         elif gate_status == "rejected":
             status = CandidateStatus.REJECTED
             reasons = [

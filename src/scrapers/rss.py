@@ -132,6 +132,20 @@ class RSSScraper(BaseScraper):
                             if full:
                                 content = full
 
+                metadata = {
+                    "feed_name": source.name,
+                    "category": source.category,
+                    "tags": [tag.term for tag in entry.get("tags", [])],
+                }
+                if source.category == "overseas-ai-video":
+                    metadata.update(
+                        {
+                            "content_platform": "youtube",
+                            "quality_platform": "youtube",
+                            "engagement_pending": True,
+                            "source_level": "primary",
+                        }
+                    )
                 item = ContentItem(
                     id=self._generate_id("rss", feed_id, entry_hash),
                     source_type=SourceType.RSS,
@@ -141,11 +155,7 @@ class RSSScraper(BaseScraper):
                     author=entry.get("author", source.name),
                     published_at=published_at,
                     profile=source.profile,
-                    metadata={
-                        "feed_name": source.name,
-                        "category": source.category,
-                        "tags": [tag.term for tag in entry.get("tags", [])],
-                    },
+                    metadata=metadata,
                 )
                 items.append(item)
 

@@ -263,30 +263,47 @@
         "profile": "pangmen-topic-radar"
       },
       {
+        "name": "Smol AI News",
+        "url": "https://news.smol.ai/rss.xml",
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
+        "category": "overseas-ai-media",
+        "profile": "pangmen-topic-radar"
+      },
+      {
         "name": "YouTube - Matt Wolfe",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChpleBmo18P08aKCIgti38g",
-        "enabled": false,
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
       {
         "name": "YouTube - Jeff Su",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwAnu01qlnVg1Ai2AbtTMaA",
-        "enabled": false,
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
       {
         "name": "YouTube - Andrej Karpathy",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
-        "enabled": false,
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
         "category": "overseas-ai-video",
-        "profile": "pangmen-topic-radar"
+        "profile": "pangmen-ai-tech-radar"
       },
       {
         "name": "YouTube - AI Explained",
         "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNJ1Ymd5yFuUPtn21xtRbbw",
-        "enabled": false,
+        "enabled": true,
+        "shadow": true,
+        "expected_cadence_hours": 24,
         "category": "overseas-ai-video",
         "profile": "pangmen-topic-radar"
       },
@@ -371,7 +388,7 @@
       "fetch_comments": 3
     },
     "twitter": {
-      "enabled": true,
+      "enabled": false,
       "mode": "official_api",
       "shadow": true,
       "users": [
@@ -402,7 +419,7 @@
       "reply_min_likes": 5,
       "official_bearer_token_env": "X_BEARER_TOKEN",
       "official_max_requests_per_run": 3,
-      "local_cli_fallback_enabled": true,
+      "local_cli_fallback_enabled": false,
       "local_cli_command": "opencli",
       "local_cli_timeout_sec": 45,
       "official_queries": [

@@ -158,8 +158,9 @@ def test_repository_registry_records_current_gaps_and_p0_shadow_sources() -> Non
     by_id = {source.source_id: source for source in registry.sources}
 
     assert by_id["github-direct"].lifecycle is SourceLifecycle.SHADOW
-    assert by_id["x-official"].lifecycle is SourceLifecycle.SHADOW
+    assert by_id["x-official"].lifecycle is SourceLifecycle.DISABLED
     assert by_id["x-official"].access_method == "official_api_or_local_opencli"
+    assert by_id["youtube-rss"].lifecycle is SourceLifecycle.SHADOW
     assert by_id["youtube-data"].access_method == "official_api_or_local_ytdlp"
     assert by_id["reddit-community"].lifecycle is SourceLifecycle.SHADOW
     assert by_id["bluesky-public"].lifecycle is SourceLifecycle.SHADOW
@@ -187,8 +188,8 @@ def test_repository_registry_records_current_gaps_and_p0_shadow_sources() -> Non
         for requirement in registry.requirements
     }
     assert requirements["hot_content"].required_source_ids == [
-        "x-official",
-        "youtube-data",
+        "aihot",
+        "youtube-rss",
         "reddit-community",
     ]
     assert "bluesky-public" not in requirements["hot_content"].required_source_ids
@@ -199,8 +200,7 @@ def test_repository_registry_records_current_gaps_and_p0_shadow_sources() -> Non
     production = registry.coverage_report(production=True)
     gaps = {gap.decision_lane: gap for gap in production.gaps}
     assert gaps["hot_content"].missing_source_ids == [
-        "x-official",
-        "youtube-data",
+        "youtube-rss",
         "reddit-community",
     ]
     assert gaps["technical_frontier"].missing_source_ids == ["github-direct"]

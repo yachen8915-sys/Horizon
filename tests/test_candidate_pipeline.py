@@ -116,6 +116,18 @@ def test_social_observation_can_be_recorded_before_ai() -> None:
     assert candidate.reason_codes == [ReasonCode.IMMATURE]
 
 
+def test_pending_youtube_metrics_use_incomplete_engagement_reason() -> None:
+    item = _item(with_intelligence=False)
+    item.processing = None
+    item.metadata["engagement_gate_status"] = "observing"
+    item.metadata["engagement_gate_reason"] = "engagement_pending"
+
+    candidate = CandidateBuilder("v1").from_preanalysis_item(item)
+
+    assert candidate.status is CandidateStatus.OBSERVING
+    assert candidate.reason_codes == [ReasonCode.INCOMPLETE_ENGAGEMENT]
+
+
 def test_observation_history_is_carried_across_candidate_snapshots(
     tmp_path, monkeypatch
 ) -> None:

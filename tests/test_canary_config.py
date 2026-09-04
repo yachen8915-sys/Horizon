@@ -85,8 +85,8 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
         REPOSITORY_ROOT / ".github" / "workflows" / "horizon-canary.yml"
     ).read_text(encoding="utf-8")
 
-    assert 'cron: "0 1 * * *"' in workflow
-    assert "2026-09-04" in workflow
+    assert 'cron: "50 23 * * *"' in workflow
+    assert "2026-09-05" in workflow
     assert "HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}" in workflow
     assert "HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}" not in workflow
     assert "python scripts/prepare_canary_config.py" in workflow
@@ -95,3 +95,5 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
     assert "contents: read" in workflow
     assert "contents: write" not in workflow
     assert "peaceiris/actions-gh-pages" not in workflow
+    assert "X_BEARER_TOKEN" not in workflow
+    assert "YOUTUBE_DATA_API_KEY" not in workflow

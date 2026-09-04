@@ -151,6 +151,29 @@ def test_mature_social_item_with_incomplete_metrics_is_rejected() -> None:
     assert video.metadata["engagement_gate_reason"] == "incomplete_engagement"
 
 
+def test_mature_youtube_rss_waits_for_metrics_instead_of_entering_digest() -> None:
+    video = _item(
+        "youtube-rss-pending",
+        source_type=SourceType.RSS,
+        age_hours=20,
+        engagement={},
+    )
+    video.metadata.update(
+        {
+            "category": "overseas-ai-video",
+            "quality_platform": "youtube",
+            "engagement_pending": True,
+            "source_level": "primary",
+        }
+    )
+
+    result = _gate().evaluate([video], now=NOW)
+
+    assert result.eligible == []
+    assert result.observing == [video]
+    assert video.metadata["engagement_gate_reason"] == "engagement_pending"
+
+
 def test_official_rss_is_not_subject_to_social_thresholds() -> None:
     official = _item(
         "official",

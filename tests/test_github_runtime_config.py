@@ -62,7 +62,7 @@ def test_github_runtime_config_defines_bluesky_as_bounded_free_shadow_source():
     assert policy["required_metrics"] == ["likes", "reposts", "replies", "quotes"]
 
 
-def test_github_runtime_config_enables_local_no_key_social_fallbacks():
+def test_github_runtime_config_uses_no_key_youtube_and_disables_direct_x():
     config = json.loads(
         (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
             encoding="utf-8"
@@ -71,8 +71,8 @@ def test_github_runtime_config_enables_local_no_key_social_fallbacks():
 
     twitter = config["sources"]["twitter"]
     youtube = config["sources"]["youtube"]
-    assert twitter["local_cli_fallback_enabled"] is True
-    assert twitter["local_cli_command"] == "opencli"
+    assert twitter["enabled"] is False
+    assert twitter["local_cli_fallback_enabled"] is False
     assert youtube["local_cli_fallback_enabled"] is True
     assert youtube["local_cli_command"] == "yt-dlp"
     assert youtube["local_cli_concurrency"] == 2
@@ -101,7 +101,7 @@ def test_github_p0_sources_are_declared_as_shadow_only():
     assert sum(source["type"] == "repo_search" for source in sources) >= 2
 
 
-def test_dead_youtube_channel_feeds_are_not_treated_as_fallbacks() -> None:
+def test_youtube_channel_feeds_are_enabled_as_shadow_discovery() -> None:
     config = json.loads(
         (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
             encoding="utf-8"
@@ -125,8 +125,34 @@ def test_dead_youtube_channel_feeds_are_not_treated_as_fallbacks() -> None:
     )
 
     assert youtube_feeds
-    assert all(source["enabled"] is False for source in youtube_feeds)
-    assert youtube_registry["lifecycle"] == "coverage_gap"
+    assert all(source["enabled"] is True for source in youtube_feeds)
+    assert all(source["shadow"] is True for source in youtube_feeds)
+    assert all(source["expected_cadence_hours"] == 24 for source in youtube_feeds)
+    assert youtube_registry["lifecycle"] == "shadow"
+
+
+def test_smol_ai_news_is_a_shadow_editorial_feed() -> None:
+    config = json.loads(
+        (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    feed = next(
+        source
+        for source in config["sources"]["rss"]
+        if source["name"] == "Smol AI News"
+    )
+
+    assert feed == {
+        "name": "Smol AI News",
+        "url": "https://news.smol.ai/rss.xml",
+        "enabled": True,
+        "shadow": True,
+        "expected_cadence_hours": 24,
+        "category": "overseas-ai-media",
+        "profile": "pangmen-topic-radar",
+    }
 
 
 def test_overseas_editorial_feeds_are_shadowed_until_validated() -> None:
@@ -146,6 +172,7 @@ def test_overseas_editorial_feeds_are_shadowed_until_validated() -> None:
         "TechCrunch Artificial Intelligence",
         "The Verge AI",
         "MIT Technology Review AI",
+        "Smol AI News",
     }
     assert all(feed["shadow"] is True for feed in feeds)
 
@@ -162,13 +189,13 @@ def test_workflow_defines_disabled_ready_morning_and_afternoon_modes():
     assert "workflow_dispatch:" in workflow
     assert "run-name:" in workflow
     assert "schedule:" in workflow
-    assert '- cron: "0 1 * * *"' in workflow
+    assert '- cron: "50 23 * * *"' in workflow
     assert '- cron: "0 8 * * *"' in workflow
     assert "source_shadow" in workflow
     assert "intelligence_shadow" in workflow
     assert "--intelligence-run-mode" in workflow
-    assert "X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}" in workflow
-    assert "YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}" in workflow
+    assert "X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}" not in workflow
+    assert "YOUTUBE_DATA_API_KEY: ${{ secrets.YOUTUBE_DATA_API_KEY }}" not in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.run_mode == 'webhook_test'" in workflow
     assert "ALAPI_TOKEN: ${{ secrets.ALAPI_TOKEN }}" in workflow
 

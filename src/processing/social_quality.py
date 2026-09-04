@@ -91,6 +91,13 @@ class SocialEngagementQualityGate:
                     self._mark(item, "observing", "insufficient_maturity", 0.0)
                     result.observing.append(item)
                     continue
+                if (
+                    complete < policy.minimum_complete_fields
+                    and item.metadata.get("engagement_pending") is True
+                ):
+                    self._mark(item, "observing", "engagement_pending", 0.0)
+                    result.observing.append(item)
+                    continue
                 if complete < policy.minimum_complete_fields:
                     self._mark(item, "rejected", "incomplete_engagement", 0.0)
                     result.rejected.append(item)
