@@ -1,5 +1,5 @@
 name: Horizon Feishu Canary
-run-name: Horizon Feishu Canary (${{ github.event_name }})
+run-name: Horizon Feishu Canary (${{ inputs.run_mode || 'scheduled-full' }})
 
 on:
   schedule:
@@ -22,6 +22,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   canary:
@@ -29,19 +30,44 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Gate the one-day canary
+      - name: Gate the isolated canary
         id: gate
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          TARGET_DATE: "2026-09-05"
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          today="$(TZ=Asia/Shanghai date +%F)"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$today" = "$TARGET_DATE" ]; then
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          cutoff="$(date -u -d '12 hours ago' +%s)"
+          recent_runs="$(gh api "/repos/$REPOSITORY/actions/workflows/horizon-canary.yml/runs?per_page=30")"
+          successful_manual_full="$(
+            jq --argjson cutoff "$cutoff" --arg run_id "$RUN_ID" '
+              [.workflow_runs[]
+                | select((.id | tostring) != $run_id)
+                | select(.event == "workflow_dispatch")
+                | select(
+                    .display_title == "Horizon Feishu Canary (full)" or
+                    .display_title == "Horizon Feishu Canary (workflow_dispatch)"
+                  )
+                | select(.conclusion == "success")
+                | select((.created_at | fromdateiso8601) >= $cutoff)
+              ] | length
+            ' <<< "$recent_runs"
+          )"
+          if [ "$successful_manual_full" -gt 0 ]; then
+            echo "SKIP scheduled backup because today's full run already succeeded"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout redesign branch
         if: steps.gate.outputs.should_run == 'true'
