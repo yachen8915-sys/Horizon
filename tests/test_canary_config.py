@@ -87,7 +87,7 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
     ).read_text(encoding="utf-8")
 
     assert 'cron: "50 23 * * *"' in workflow
-    assert "2026-09-05" in workflow
+    assert "TARGET_DATE" not in workflow
     assert "HORIZON_CANARY_WEBHOOK_URL: ${{ secrets.HORIZON_CANARY_WEBHOOK_URL }}" in workflow
     assert "HORIZON_WEBHOOK_URL: ${{ secrets.HORIZON_WEBHOOK_URL }}" not in workflow
     assert "python scripts/prepare_canary_config.py" in workflow
@@ -103,3 +103,6 @@ def test_canary_workflow_is_date_gated_and_never_uses_production_webhook() -> No
     assert "peaceiris/actions-gh-pages" not in workflow
     assert "X_BEARER_TOKEN" not in workflow
     assert "YOUTUBE_DATA_API_KEY" not in workflow
+    assert "Horizon Feishu Canary (${{ inputs.run_mode || 'scheduled-full' }})" in workflow
+    assert "SKIP scheduled backup because today's full run already succeeded" in workflow
+    assert '"Horizon Feishu Canary (workflow_dispatch)"' in workflow
