@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from pydantic import ValidationError
+
 from src.models import (
     CandidateRecord,
     CandidateScore,
     CandidateStatus,
+    ClassificationResult,
+    ContentAnalysis,
     ContentItem,
     DecisionLane,
     DeliveryRecord,
     EvidenceStatus,
     IntelligenceAnalysis,
     IntelligenceSelectionConfig,
+    ProcessingResult,
     RadarRunMode,
     SourceType,
 )
@@ -77,6 +83,185 @@ def _candidate(
 def _selector(**overrides) -> IntelligenceSelector:
     config = IntelligenceSelectionConfig(**overrides)
     return IntelligenceSelector(config)
+
+
+def _trend(candidate_id: str, *, operations=8, content=7, rank=10, heat=100,
+           providers=None, **kwargs) -> CandidateRecord:
+    candidate = _candidate(
+        candidate_id, lane=DecisionLane.HOT_CONTENT, total=8,
+        author="", source_id="dailyhotapi", platform="weibo", **kwargs,
+    )
+    candidate.item.processing = ProcessingResult(
+        classification=ClassificationResult(
+            profile="pangmen-platform-trend-radar", method="source_override",
+        ),
+        analysis=ContentAnalysis(
+            reason="safe operations opportunity", summary="platform trend",
+            score=8, operations_score=operations, content_opportunity_score=content,
+        ),
+    )
+    candidate.item.metadata.update(
+        rank=rank, hot_value=heat,
+        providers=providers if providers is not None else ["DailyHotAPI"],
+    )
+    return candidate
+
+
+def test_six_unverified_platform_trends_survive_evidence_and_aggregator_limits():
+    rows = [_trend(f"trend-{i}", evidence=EvidenceStatus.UNVERIFIED) for i in range(6)]
+    result = _selector(unverified_hot_limit=3, author_limit=1,
+                       source_limit=1, platform_limit=1).select(rows, now=NOW)
+    assert len(result.selected) == 6
+    assert result.held == []
+
+
+@pytest.mark.parametrize("duplicate_field", ["event_key", "editorial_topic_key"])
+def test_trends_still_hold_exact_duplicates_even_for_major_events(duplicate_field):
+    first, second = _trend("a"), _trend("b")
+    setattr(second, duplicate_field, getattr(first, duplicate_field))
+    for row in [first, second]:
+        row.intelligence.score.total = 9.5
+        row.intelligence.score.decision_impact = 10
+    result = _selector().select([second, first], now=NOW)
+    assert [row.candidate_id for row in result.selected] == ["a"]
+    assert [row.candidate_id for row in result.held] == ["b"]
+
+
+def test_trend_titles_sharing_broad_words_are_not_fuzzy_merged():
+    rows = [_trend("a"), _trend("b")]
+    rows[0].item.title = "AI 工作方式改变了，新人如何准备面试"
+    rows[1].item.title = "AI 工作方式改变了，公司开始重新设计周报"
+    result = _selector(author_limit=1, source_limit=1).select(rows, now=NOW)
+    assert len(result.selected) == 2
+
+
+def test_platform_trend_sort_uses_only_operations_providers_rank_heat_content_and_id():
+    rows = [
+        _trend("operations", operations=9, rank=99, content=1),
+        _trend("providers", providers=["ALAPI", "DailyHotAPI"], rank=99),
+        _trend("rank", rank=1, heat=1, content=1),
+        _trend("heat", heat=500, content=1),
+        _trend("content", content=9),
+        _trend("a", providers=[" DAILYHOTAPI ", "dailyhotapi"]),
+        _trend("z"),
+    ]
+    rows[-1].evidence_status = EvidenceStatus.CONFIRMED
+    rows[-1].intelligence.score.total = 10
+    rows[-1].intelligence.score.freshness = 10
+    rows[0].evidence_status = EvidenceStatus.UNVERIFIED
+    result = _selector(max_items=20).select(list(reversed(rows)), now=NOW)
+    assert [row.candidate_id for row in result.selected] == [
+        "operations", "providers", "rank", "heat", "content", "a", "z",
+    ]
+
+
+def test_platform_trend_sort_handles_legacy_scores_and_invalid_native_signals():
+    fallback = _trend("fallback", operations=None, content=None, rank="bad", heat=None)
+    fallback.item.processing.analysis.score = 9
+    invalid = _trend("z-invalid", rank=True, heat=float("nan"))
+    valid = _trend("valid", rank=2, heat=10)
+    result = _selector().select([invalid, valid, fallback], now=NOW)
+    assert [row.candidate_id for row in result.selected] == ["fallback", "valid", "z-invalid"]
+
+
+def test_sixteenth_trend_is_retained_as_capacity_overflow():
+    rows = [_trend(f"trend-{i:02}") for i in range(16)]
+    result = _selector(max_items=20).select(rows, now=NOW)
+    assert len(result.selected) == 15
+    assert [row.candidate_id for row in result.held] == ["trend-15"]
+    assert result.held[0].reason_codes[-1].value == "held_by_capacity"
+    assert result.held[0].item.processing.classification.profile == "pangmen-platform-trend-radar"
+    assert result.rejected == []
+
+
+def test_platform_trend_limit_can_be_lowered_and_never_forces_fill():
+    rows = [_trend(f"trend-{i}") for i in range(8)]
+    assert len(_selector(max_items=20).select(rows, now=NOW).selected) == 8
+    result = _selector(max_items=20, platform_trend_detail_limit=5).select(rows, now=NOW)
+    assert len(result.selected) == 5
+    assert len(result.held) == 3
+
+
+@pytest.mark.parametrize("limit", [0, 16])
+def test_platform_trend_detail_limit_rejects_out_of_range_values(limit):
+    with pytest.raises(ValidationError):
+        IntelligenceSelectionConfig(platform_trend_detail_limit=limit)
+
+
+def test_platform_trend_detail_limit_defaults_to_fifteen():
+    assert IntelligenceSelectionConfig().platform_trend_detail_limit == 15
+
+
+def test_mixed_lanes_still_obey_the_twenty_item_total_capacity():
+    trends = [_trend(f"trend-{i:02}", operations=10) for i in range(15)]
+    ai_rows = [
+        _candidate(f"ai-{i}", lane=DecisionLane.PRODUCT_CAPABILITY, total=8,
+                   author=f"author-{i}", source_id=f"source-{i}", platform=f"platform-{i}")
+        for i in range(6)
+    ]
+    result = _selector().select([*ai_rows, *trends], now=NOW)
+    assert len(result.selected) == 20
+    assert [row.candidate_id for row in result.held] == ["ai-5"]
+    assert result.held[0].reason_codes[-1].value == "held_by_capacity"
+
+
+
+def test_default_capacity_keeps_fifteen_trends_and_a_strict_ai_candidate():
+    trends = [_trend(f"trend-{i:02}", operations=10) for i in range(16)]
+    ai = _candidate("strict-ai", lane=DecisionLane.PRODUCT_CAPABILITY,
+                    total=8, source_id="official", author="official")
+    result = _selector().select([ai, *trends], now=NOW)
+    assert len(result.selected) == 16
+    assert [row.candidate_id for row in result.selected][-1] == "strict-ai"
+    assert [row.candidate_id for row in result.held] == ["trend-15"]
+    assert result.held[0].reason_codes[-1].value == "held_by_capacity"
+
+
+
+def test_platform_trend_cooldown_remains_effective():
+    trend = _trend("repeat")
+    delivery = DeliveryRecord(
+        delivery_id="d1", run_id="morning", run_mode=RadarRunMode.MORNING,
+        delivered_at=NOW - timedelta(days=1), candidate_id=trend.candidate_id,
+        event_key=trend.event_key, event_version=1,
+        display_tier="selected", content_fingerprint="old",
+    )
+    result = _selector().select([trend], deliveries=[delivery], now=NOW)
+    assert result.selected == []
+    assert result.held[0].reason_codes[-1].value == "duplicate"
+
+
+def test_raw_item_profile_also_identifies_platform_trends():
+    rows = [_trend(f"trend-{i}", evidence=EvidenceStatus.UNVERIFIED) for i in range(6)]
+    for row in rows:
+        row.item.profile = "pangmen-platform-trend-radar"
+        row.item.processing = None
+    result = _selector().select(rows, now=NOW)
+    assert len(result.selected) == 6
+
+
+def test_duplicate_after_fifteen_details_is_not_exposed_as_capacity_overflow():
+    rows = [_trend(f"trend-{i:02}") for i in range(17)]
+    rows[-1].event_key = rows[-2].event_key
+    result = _selector(max_items=20).select(rows, now=NOW)
+    assert [row.reason_codes[-1].value for row in result.held] == ["held_by_capacity", "duplicate"]
+
+
+def test_platform_trends_do_not_consume_ai_lane_diversity_counts():
+    trend = _trend("trend", operations=10)
+    ai = _candidate("ai", lane=DecisionLane.PRODUCT_CAPABILITY, total=8,
+                    author="", source_id="dailyhotapi", platform="weibo")
+    result = _selector(author_limit=1, source_limit=1, platform_limit=1).select([trend, ai], now=NOW)
+    assert [row.candidate_id for row in result.selected] == ["trend", "ai"]
+
+
+def test_ai_lane_still_obeys_source_and_platform_limits():
+    rows = [_candidate(f"ai-{i}", lane=DecisionLane.PRODUCT_CAPABILITY,
+                       total=8, author=f"author-{i}", platform="hackernews")
+            for i in range(4)]
+    result = _selector(source_limit=2, platform_limit=3).select(rows, now=NOW)
+    assert len(result.selected) == 2
+    assert all(row.reason_codes[-1].value == "held_by_diversity" for row in result.held)
 
 
 def test_product_decisions_are_prioritized_when_scores_are_close() -> None:

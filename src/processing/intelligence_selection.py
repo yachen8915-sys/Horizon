@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from math import isfinite
 
 from ..models import (
     CandidateRecord,
@@ -92,16 +93,20 @@ class IntelligenceSelector:
         source_counts: Counter[str] = Counter()
         platform_counts: Counter[str] = Counter()
         topic_counts: Counter[str] = Counter()
+        event_counts: Counter[str] = Counter()
         unverified_hot_count = 0
+        platform_trend_selected_count = 0
 
         for candidate in eligible:
-            if len(result.selected) >= self.config.max_items:
+            is_platform_trend = self._is_platform_trend(candidate)
+            if not is_platform_trend and len(result.selected) >= self.config.max_items:
                 result.held.append(
                     self._held(candidate, ReasonCode.HELD_BY_CAPACITY, observed_at)
                 )
                 continue
             is_unverified_hot = bool(
-                candidate.intelligence
+                not is_platform_trend
+                and candidate.intelligence
                 and candidate.intelligence.primary_lane is DecisionLane.HOT_CONTENT
                 and candidate.evidence_status is EvidenceStatus.UNVERIFIED
             )
@@ -134,6 +139,30 @@ class IntelligenceSelector:
                 or candidate.item.source_type.value
             ).lower()
             topic = candidate.editorial_topic_key or candidate.event_key or candidate.candidate_id
+            if is_platform_trend:
+                if (
+                    topic_counts[topic] >= self.config.topic_limit
+                    or (candidate.event_key and event_counts[candidate.event_key])
+                ):
+                    result.held.append(
+                        self._held(candidate, ReasonCode.DUPLICATE, observed_at)
+                    )
+                    continue
+                # Capacity overflow is still a qualified, deduplicated candidate.
+                topic_counts[topic] += 1
+                if candidate.event_key:
+                    event_counts[candidate.event_key] += 1
+                if (
+                    len(result.selected) >= self.config.max_items
+                    or platform_trend_selected_count >= self.config.platform_trend_detail_limit
+                ):
+                    result.held.append(
+                        self._held(candidate, ReasonCode.HELD_BY_CAPACITY, observed_at)
+                    )
+                    continue
+                result.selected.append(self._selected(candidate, observed_at))
+                platform_trend_selected_count += 1
+                continue
             exceeds = (
                 author_counts[author] >= self.config.author_limit
                 or source_counts[source] >= self.config.source_limit
@@ -153,6 +182,8 @@ class IntelligenceSelector:
             source_counts[source] += 1
             platform_counts[platform] += 1
             topic_counts[topic] += 1
+            if candidate.event_key:
+                event_counts[candidate.event_key] += 1
             if is_unverified_hot:
                 unverified_hot_count += 1
         return result
@@ -160,14 +191,54 @@ class IntelligenceSelector:
     def _sort_key(self, candidate: CandidateRecord) -> tuple:
         analysis = candidate.intelligence
         assert analysis is not None
+        if self._is_platform_trend(candidate):
+            content_analysis = candidate.item.processing.analysis if candidate.item.processing else None
+            operations = content_analysis.operations_score if content_analysis else None
+            content = content_analysis.content_opportunity_score if content_analysis else None
+            fallback = content_analysis.score if content_analysis else None
+            metadata = candidate.item.metadata
+            providers = metadata.get("providers")
+            if not isinstance(providers, (list, tuple, set)):
+                providers = [metadata.get("provider")]
+            provider_count = len({
+                str(provider).strip().casefold()
+                for provider in providers if provider and str(provider).strip()
+            })
+            rank = self._native_number(metadata.get("rank"))
+            heat = self._native_number(metadata.get("hot_value"))
+            return (
+                -(operations if operations is not None else fallback or 0),
+                -provider_count,
+                rank if rank is not None and rank >= 1 else float("inf"),
+                -(heat if heat is not None and heat >= 0 else 0),
+                -(content if content is not None else fallback or 0),
+                0,
+                candidate.candidate_id,
+            )
         effective = analysis.score.total + LANE_PRIORITY_BOOST[analysis.primary_lane]
         return (
             -effective,
             -EVIDENCE_SORT[candidate.evidence_status],
             -analysis.score.freshness,
             -analysis.score.differentiation,
+            0,
+            0,
             candidate.candidate_id,
         )
+
+    @staticmethod
+    def _is_platform_trend(candidate: CandidateRecord) -> bool:
+        profile = (
+            candidate.item.processing.classification.profile
+            if candidate.item.processing else candidate.item.profile
+        )
+        return profile == "pangmen-platform-trend-radar"
+
+    @staticmethod
+    def _native_number(value: object) -> float | None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value):
+            return float(value)
+        return None
 
     def _major_event(self, candidate: CandidateRecord) -> bool:
         analysis = candidate.intelligence

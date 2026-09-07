@@ -1219,11 +1219,16 @@
       "product_capability",
       "hot_content",
       "technical_frontier",
-      "platform_ai_change"
+      "platform_ai_change",
+      "ai_industry_society"
     ],
     "candidate_store_file": "data/candidates/candidate_ledger.jsonl",
     "delivery_store_file": "data/candidates/delivery_ledger.jsonl",
-    "rule_version": "2026-09-03-v1"
+    "rule_version": "2026-09-07-v3",
+    "selection": {
+      "max_items": 20,
+      "platform_trend_detail_limit": 15
+    }
   },
   "digest": {
     "max_items": 25,

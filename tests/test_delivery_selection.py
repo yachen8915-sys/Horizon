@@ -89,6 +89,25 @@ def test_morning_delivery_contains_all_selected_candidates() -> None:
     assert len(result.records) == 2
 
 
+def test_capacity_handoff_preserves_both_ai_and_platform_overflow():
+    from src.models import ReasonCode
+
+    ai = _candidate("ai-overflow", updated_at=MORNING)
+    hot = _candidate("hot-overflow", updated_at=MORNING)
+    hot.item.profile = "pangmen-platform-trend-radar"
+    hot.intelligence.primary_lane = DecisionLane.HOT_CONTENT
+    for row in [ai, hot]:
+        row.status = CandidateStatus.HELD
+        row.reason_codes = [ReasonCode.HELD_BY_CAPACITY]
+    result = DeliverySelector().select(
+        [], more_candidates=[ai, hot], run_id="morning-run",
+        run_mode=RadarRunMode.MORNING, now=MORNING,
+    )
+    assert result.more_candidates == [ai, hot]
+    assert result.more_candidates[1].item.profile == "pangmen-platform-trend-radar"
+    assert [record.display_tier for record in result.records] == ["more", "more"]
+
+
 def test_capacity_held_candidates_are_delivered_as_more() -> None:
     selected = _candidate("selected", updated_at=MORNING)
     more = _candidate("more", updated_at=MORNING).model_copy(

@@ -1195,13 +1195,14 @@ class IntelligenceSelectionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_min_items: int = Field(default=8, ge=1)
-    max_items: int = Field(default=12, ge=1)
+    max_items: int = Field(default=20, ge=1)
     minimum_score: float = Field(default=6.5, ge=0, le=10)
     author_limit: int = Field(default=2, ge=1)
     source_limit: int = Field(default=3, ge=1)
     platform_limit: int = Field(default=4, ge=1)
     topic_limit: int = Field(default=1, ge=1)
     unverified_hot_limit: int = Field(default=3, ge=0)
+    platform_trend_detail_limit: int = Field(default=15, ge=1, le=15)
     cooldown_days: int = Field(default=7, ge=1)
     major_event_override_score: float = Field(default=9, ge=0, le=10)
 

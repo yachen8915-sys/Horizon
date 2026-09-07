@@ -55,6 +55,13 @@ def test_canary_config_does_not_mutate_the_source_mapping() -> None:
     assert json.dumps(source, ensure_ascii=False, sort_keys=True) == before
 
 
+def test_canary_preserves_content_lanes_and_platform_detail_limit():
+    intelligence = build_canary_config(_runtime_config())["intelligence"]
+    assert intelligence["selection"]["platform_trend_detail_limit"] == 15
+    assert intelligence["rule_version"] == "2026-09-07-v3"
+    assert "ai_industry_society" in intelligence["decision_lanes"]
+
+
 def test_canary_title_prefix_is_applied_to_collapsible_card() -> None:
     notifier = WebhookNotifier(
         WebhookConfig(

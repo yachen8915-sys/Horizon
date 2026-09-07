@@ -5,6 +5,19 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_github_intelligence_keeps_shadow_mode_and_bounds_platform_details():
+    from src.models import Config
+
+    raw = json.loads((REPOSITORY_ROOT / "data" / "config.github.json").read_text(encoding="utf-8"))
+    intelligence = Config.model_validate(raw).intelligence
+    assert intelligence.delivery_enabled is False
+    assert intelligence.run_mode.value == "shadow"
+    assert intelligence.rule_version == "2026-09-07-v3"
+    assert "ai_industry_society" in [lane.value for lane in intelligence.decision_lanes]
+    assert intelligence.selection.platform_trend_detail_limit == 15
+    assert intelligence.selection.max_items == 20
+
+
 def test_github_runtime_config_bounds_slow_ai_analysis():
     config = json.loads(
         (REPOSITORY_ROOT / "data" / "config.github.json").read_text(
