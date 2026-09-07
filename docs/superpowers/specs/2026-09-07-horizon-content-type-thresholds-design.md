@@ -183,3 +183,31 @@ DailyHotAPI、ALAPI 和其他平台热点来源均进入同一候选池，再按
 实施阶段只修改与本设计直接相关的模型枚举、分析提示、候选门槛、热点分流、排序、摘要/飞书渲染、配置和测试。
 
 本轮不新增数据源，不建设用户反馈学习系统，不重做飞书卡片视觉样式，不改变平台变化雷达的采集范围，也不自动提交、推送、触发 GitHub Actions 或发送飞书消息。
+
+## 12. 实施验证（2026-09-07，离线回放实测）
+
+以下仅追加事实验证记录，不修改前述设计决策。状态为 `DONE_WITH_CONCERNS`：回放工具完成，整体内容验收尚有缺口。
+
+实际执行命令（在隔离工作树中，使用 `uv run --offline --extra dev python`；`-o addopts=''` 用于显示精确测试总数）：
+
+```powershell
+uv run --offline --extra dev python -m pytest tests/test_replay_intelligence_selection.py -o addopts='' -q
+uv run --offline --extra dev python scripts/replay_intelligence_selection.py --input 'C:\Users\cheni\AppData\Local\Temp\horizon-canary-34067056865-b430a6c5ff83439e993dccb95748ade5' --output "$env:TEMP/horizon-content-type-replay.json"
+uv run --offline --extra dev python -m compileall -q src scripts
+uv run --offline --extra dev python -m pytest tests/test_intelligence_models.py tests/test_intelligence_analysis.py tests/test_analyzer.py tests/test_profiles.py tests/test_content_type_gate.py tests/test_candidate_pipeline.py tests/test_balanced_digest.py tests/test_intelligence_selection.py tests/test_delivery_selection.py tests/test_candidate_identity.py tests/test_intelligence_presentation.py tests/test_intelligence_brief.py tests/test_webhook.py tests/test_summarizer.py tests/test_coverage_notice.py tests/test_intelligence_diagnostics.py tests/test_fetch_reporting.py tests/test_replay_intelligence_selection.py tests/test_canary_config.py tests/test_github_runtime_config.py -o addopts='' -q
+uv run --offline --extra dev python -m pytest tests/test_cli.py tests/test_main.py -o addopts='' -q
+uv run --offline --extra dev python -m pytest -o addopts='' -q
+uv run --offline --extra dev python -m pytest tests/test_replay_intelligence_selection.py tests/test_canary_config.py tests/test_github_runtime_config.py -o addopts='' -q
+git diff --check
+```
+
+- TDD：回放测试先出现 9 项失败（入口/模块未实现），实现后 9 项通过；入口测试禁止网络、子进程及报告以外的文件写入，检查输入字节不变。配置在内存中强制 shadow、关闭 delivery/canary；不读取或写入配置中的候选/送达账本。
+- 聚焦回归 502 项通过，CLI/main 15 项通过，回放与配置复核 30 项通过，compileall 通过。全套 1025 项通过、4 项失败：`tests/test_bluesky.py::test_bluesky_search_is_anonymous_and_preserves_native_metrics`、`tests/test_x_official.py::test_x_recent_search_preserves_native_metrics`、`tests/test_youtube.py::test_youtube_search_enriches_native_engagement`、`tests/test_youtube.py::test_youtube_channel_watchlist_uses_uploads_playlist`。四项均使用 2026-09-02 固定发布时间，实际来源健康为 `stale`，断言仍期望 `healthy`；与开工前已知失败一致，未修改 freshness 或夹具。
+- 真实输出：`C:\Users\cheni\AppData\Local\Temp\horizon-content-type-replay.json`。读取 253 条归档，253 条兼容、0 条 incompatible；19 条 selected、6 条 held（全部容量溢出）、223 条 rejected、5 条 observing。详情为 3 条 AI 产品、1 条平台变化、15 条热点观察；更多热点 6 条。原始得分、分类和来源信号未改写。
+- **未通过详细可借势验收**：“用AI拼豆的方式打开旅行”归档运营分 7、内容分 8，正确得到 `trend_pool=leverage`，但按当前运营分优先排序落在 `more_hot`；详细 `hot_leverage` 为空，不能报告已经进入详细“今日可借势”。
+- “军训才艺大赏”运营分 7、内容分 5、抖音第 10 位，满足核心平台前十信号，进入 watch 池后因容量落在 `more_hot`；“教育部回应中小学是否须买校服”运营分 8、内容分 5、抖音第 1 位，进入详细 `hot_watch`。二者均由真实归档信号满足规则，未补写新 `operations_focus`。
+- **待新影子运行验证**：“女儿用豆包抄答案家长只用了一招”的归档分类仍为 `hot_content`；本次运营分 7、内容分 6、微博第 25 位、单 Provider、无新 focus，被 `insufficient_hotspot_signal` 拒绝。旧数据不能验证“AI 行业与社会”新分类。
+- **未通过品牌安全验收**：“伊朗称打击了美军航母和驱逐舰”“中国博主伦敦直播遭外籍青年挑衅殴打”均进入详细 watch，说明现有安全词表仍有缺口。虽然当前门槛拦截 3 条 `brand_safety`，不能据此声称全部高风险题材已排除；本任务未扩改生产规则。
+- DailyHotAPI 微博失败、ALAPI 微博健康、DailyHotAPI 抖音健康得到准确提示：“热点覆盖不完整：微博部分来源暂时不可用，抖音、百度、36氪来源数据暂不完整，今日头条及其他热点来源仍正常。”详细热点保留 DailyHotAPI 9 条、ALAPI 6 条。旧诊断仅有扁平 `source_health`，回放明确标注只转换覆盖信息，无法恢复整体 fetch 状态。
+- 当前展示类别无“AI 媒体”，Provider 仍为来源信号。归档中 18 条标题含 GPT-6 的候选，1 条被选中、17 条被门槛拒绝；本次没有 GPT-6 去重命中，不能将拒绝计作“合并成功”。脚本复用现有精确 event/topic 选择规则并保留已有上游合并状态，没有新增标题/模糊去重；来源合并与身份规则依赖已通过的聚焦单测，本回放不重跑上游来源身份合并。
+- 详细热点确为 15 条，6 条过筛溢出保留在 `more_hot`，但上述安全缺口尚未解决。共享展示、Markdown 和飞书结构的单测通过；**真实飞书视觉与送达未验证**，本轮未联网、调用 AI、发送 webhook、触发 Actions 或发起新影子运行。
