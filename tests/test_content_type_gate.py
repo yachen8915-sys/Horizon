@@ -92,6 +92,63 @@ def test_brand_safety_precedes_admission_for_every_lane(title, lane):
     assert not gate(item, draft).accepted
 
 
+@pytest.mark.parametrize("title", [
+    "伊朗称打击了美军航母和驱逐舰",
+    "中国博主伦敦直播遭外籍青年挑衅殴打",
+    "军舰遭导弹袭击",
+    "战机轰炸军事基地",
+    "边境部队发生交火",
+    "双方发生武装冲突",
+    "一名游客被多人围殴",
+    "男子持刀伤人后被控制",
+    "格斗游戏玩家在比赛现场遭殴打",
+    "航母模型展外一名观众被围殴",
+    "游戏中发生争执后玩家在线下遭殴打",
+    "动画演示导弹攻击航母，现场观众遭殴打",
+])
+def test_real_world_military_attack_and_assault_are_brand_safety_exclusions(title):
+    item, draft = make_gate_item(title=title, operations=9, content=6)
+    result = gate(item, draft)
+    assert not result.accepted
+    assert result.reason.value == "brand_safety"
+    assert result.trend_pool is None
+
+
+@pytest.mark.parametrize("title", [
+    "航母模型与驱逐舰科普展",
+    "格斗游戏的打击感优化",
+    "职场冲突如何沟通",
+    "打击假冒营销账号",
+    "公司发起价格战争夺市场",
+    "格斗游戏中角色遭围殴的反击教程",
+    "军舰游戏中导弹击沉驱逐舰",
+    "动画演示导弹攻击航母的特效制作",
+    "模型演示导弹击沉驱逐舰",
+])
+def test_safe_neighbors_do_not_trigger_real_world_violence_rules(title):
+    item, draft = make_gate_item(title=title, operations=9, content=6)
+    result = gate(item, draft)
+    assert result.accepted
+    assert result.trend_pool == "watch"
+
+
+@pytest.mark.parametrize("title", [
+    "伊朗称打击了美军航母和驱逐舰",
+    "中国博主伦敦直播遭外籍青年挑衅殴打",
+])
+def test_replay_attack_titles_cannot_reach_hot_watch_selection(title):
+    from src.models import IntelligenceSelectionConfig
+    from src.processing.intelligence_selection import IntelligenceSelector
+
+    item, _ = make_gate_item(title=title, operations=9, content=6)
+    builder = CandidateBuilder("v1")
+    candidate = builder.apply_content_type_gate(builder.from_analyzed_item(item))
+    assert candidate.status is CandidateStatus.REJECTED
+    assert candidate.reason_codes[-1].value == "brand_safety"
+    assert "trend_pool" not in candidate.item.metadata
+    assert IntelligenceSelector(IntelligenceSelectionConfig()).select([candidate]).selected == []
+
+
 @pytest.mark.parametrize("value,accepted", [(6, True), (5.9, False)])
 def test_industry_threshold_and_pending_verification(value, accepted):
     item, draft = make_gate_item(lane=DecisionLane.AI_INDUSTRY_SOCIETY, value=value)

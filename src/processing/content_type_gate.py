@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Literal
 
 from ..models import ContentItem, DecisionLane, EvidenceStatus, ReasonCode
@@ -21,6 +22,21 @@ BRAND_SAFETY_TERMS = {
     "死亡", "暴力",
 }
 
+# Require a combat action near a military actor/target, not a country name or
+# an ordinary use of "打击" / "冲突" in operations content.
+_MILITARY_TARGET = r"(?:航母|驱逐舰|军舰|军事基地|军队|部队|战机|导弹)"
+_COMBAT_ACTION = r"(?:空袭|轰炸|炮击|袭击|攻击|打击|击沉|交火|开火)"
+_REAL_VIOLENCE_SIGNAL = re.compile(
+    rf"{_COMBAT_ACTION}.{{0,12}}{_MILITARY_TARGET}"
+    rf"|{_MILITARY_TARGET}.{{0,12}}{_COMBAT_ACTION}"
+    r"|武装冲突"
+    r"|殴打|围殴|群殴|拳打脚踢|持刀伤人|持刀行凶|砍伤|捅伤|枪击"
+)
+# Only explicit fictional/simulation framing qualifies; mentioning a game or
+# model alone must not exempt an assault on players or exhibition visitors.
+_SIMULATED_CONTEXT = re.compile(r"(?:游戏|电影|小说|动画)(?:中|内|里)|动画演示|模型演示")
+_REAL_WORLD_CONTEXT = re.compile(r"线下|现场|现实中|街头")
+
 
 @dataclass(frozen=True)
 class ContentTypeGateResult:
@@ -34,7 +50,19 @@ def is_brand_safety_excluded(item: ContentItem) -> bool:
     analysis = item.processing.analysis if item.processing else None
     signals = [item.title, *(analysis.tags if analysis else [])]
     normalized = " ".join(str(signal) for signal in signals).casefold()
-    return any(term in normalized for term in BRAND_SAFETY_TERMS)
+    if any(term in normalized for term in BRAND_SAFETY_TERMS):
+        return True
+    for signal in signals:
+        for clause in re.split(r"[,，。;；!?！？\n]", str(signal)):
+            for match in _REAL_VIOLENCE_SIGNAL.finditer(clause):
+                context = clause[:match.end()]
+                simulated = _SIMULATED_CONTEXT.search(context)
+                if simulated and not _REAL_WORLD_CONTEXT.search(
+                    context[simulated.end():]
+                ):
+                    continue
+                return True
+    return False
 
 
 def _distinct_values(item: ContentItem, plural: str, singular: str) -> set[str]:
