@@ -54,7 +54,9 @@ def build_intelligence_presentation(
     presentation = IntelligencePresentation()
     seen: set[str] = set()
     ai_detail_count = 0
+    hot_detail_count = 0
     ai_sections = {"ai_product", "ai_technical", "ai_industry"}
+    hot_sections = {"hot_leverage", "hot_watch"}
     lane_sections = {
         DecisionLane.PRODUCT_CAPABILITY: "ai_product",
         DecisionLane.TECHNICAL_FRONTIER: "ai_technical",
@@ -90,13 +92,16 @@ def build_intelligence_presentation(
                 presentation.unmapped.append(candidate)
                 continue
             ai_overflow = not compact and section in ai_sections and ai_detail_count >= 16
-            if compact or ai_overflow:
+            hot_overflow = not compact and section in hot_sections and hot_detail_count >= 15
+            if compact or ai_overflow or hot_overflow:
                 section = (
                     "more_hot"
-                    if section in {"hot_leverage", "hot_watch"}
+                    if section in hot_sections
                     else "more_ai"
                 )
             elif section in ai_sections:
                 ai_detail_count += 1
+            elif section in hot_sections:
+                hot_detail_count += 1
             getattr(presentation, section).append(candidate)
     return presentation

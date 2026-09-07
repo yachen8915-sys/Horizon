@@ -24,3 +24,10 @@ Final review: pending
 - The exact fix patch was applied and staged separately from the original 19 dirty files; unstaged diff remains 790 insertions / 23 deletions. Target-worktree overlap regression: 228 passed.
 - No network, real AI API, delivery ledger, Feishu send, Actions trigger, or remote push was performed. The existing single-character `称` Minor remains open.
 - Detailed mapping, commands, evidence, and concerns: `.superpowers/sdd/final-fix-report.md`.
+
+## Final recheck fixes — 2026-09-07
+
+- Three remaining Important findings addressed: shared logging suppresses HTTPX authenticated request URLs, diagnostics measure attempted analysis rather than preanalysis observations, and shared presentation caps all hotspot profiles at 15 details.
+- RED on committed `b2886f8`: 18 failed / 4 passed. GREEN: 22 passed. Focused suite: 323 passed. Pure committed snapshot `a667d52`: 1172 passed / the same 4 known stale failures; compileall passed.
+- Applied/staged code tree exactly matches verified snapshot tree `7b047e21992e4f11506983c0620abb73e7b4e52d` before this report-only update. Target-worktree regressions: 200 passed; original 19 dirty files still 790 insertions / 23 deletions.
+- Final reviewer acceptance remains pending. Single-character `称` Minor and live AI/Feishu acceptance remain open; no external API calls, network, ledger writes, sends, Actions or pushes performed.

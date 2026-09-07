@@ -44,4 +44,31 @@ uv run --offline --extra dev python -m compileall -q src scripts
 - 最终 reviewer 复验尚未完成。
 - 原 Minor：单字“称”可能误命中“昵称”，本批未扩改品牌安全规则。
 - 新 AI 分类、真实飞书视觉和送达仍待另行授权运行。本批没有联网、调用真实 API、写配置中的 ledger、发送飞书、触发 Actions 或推送远程。
-- YouTube 本轮覆盖的是采集器生成的异常日志和健康 detail；HTTPX 在主动开启 INFO/DEBUG 日志时自行记录请求 URL 的通用日志行为不在本轮修改范围内。
+- 首轮 YouTube 仅覆盖采集器异常日志和健康 detail；HTTPX 的 INFO 请求日志遗漏已在下方追加复修中处理，当前以追加记录为准。
+
+## 追加复修：最终 reviewer 的三项 Important
+
+基线 `b2886f8`；独立纯提交快照 `a667d52aba4868381326daf419e127535e29a695`，目录 `F:/10-GitHub/Horizon/Horizon-final-recheck-snapshot-20260907`。状态：三项已修复，等待 reviewer 再验收。
+
+1. `src/logging_config.py`：公共入口显式将 HTTPX logger 设为 WARNING，避免应用 INFO/DEBUG、包括 horizon-mcp 默认 INFO 时输出含 query key 的 HTTPX 请求 URL；应用自己的 INFO/DEBUG 和安全采集器状态码 warning 保留。新增真实 configure_logging + MockTransport 捕获输出测试，包含公共 INFO、公共 DEBUG、实际 MCP main 默认 INFO，以及 403/429 × search/channel 的 12 种组合。MCP server.run 被替换为无操作，不启动服务。
+2. `src/diagnostics/intelligence_report.py`：分析阶段分母只含具有 intelligence 或明确 PROCESSING_ERROR/ANALYSIS_FAILED 的候选；未分析的 OBSERVING、预筛 REJECTED 不再掩盖分析全失败。测试覆盖“全部分析失败 + 观察/预筛”“分析成功但零合格”“部分失败同时部分分析成功”三类口径。
+3. `src/processing/intelligence_presentation.py`：热点详情预算由共享展示统一按 hot_leverage + hot_watch 合计计算，最多 15；YouTube/非趋势 profile 的 HOT_CONTENT 也计入。保持 selected 输入顺序，新的溢出排在既有 more_hot 之前，AI 独立，不改热榜门槛或选择层多样性规则。顺序正反两种、AI 插入、已有 more、Markdown、Feishu 和诊断均有回归。
+
+所有新增回归位于 `tests/test_final_recheck_regressions.py`。三个生产文件只有上述必要修改。
+
+实际验证命令：
+
+```powershell
+uv run --offline --extra dev python -m pytest tests/test_final_recheck_regressions.py -o addopts='' -q --tb=short
+uv run --offline --extra dev python -m pytest tests/test_final_recheck_regressions.py -o addopts='' -q
+uv run --offline --extra dev python -m pytest tests/test_final_recheck_regressions.py tests/test_final_review_regressions.py tests/test_logging_config.py tests/test_mcp_server.py tests/test_intelligence_diagnostics.py tests/test_intelligence_presentation.py tests/test_intelligence_brief.py tests/test_webhook.py tests/test_summarizer.py tests/test_intelligence_selection.py tests/test_delivery_selection.py tests/test_replay_intelligence_selection.py -o addopts='' -q
+uv run --offline --extra dev python -m compileall -q src scripts
+uv run --offline --extra dev python -m pytest -o addopts='' -q --tb=short
+```
+
+- 未改代码的 b2886f8 + 新测试：18 failed / 4 passed；三项均真实复现。
+- 修复后：22 passed in 0.70s；聚焦 323 passed in 21.94s；compileall exit 0。
+- 提交独立快照 a667d52 后，git status 为空，在纯 HEAD 上全套：1172 passed / 4 failed in 27.61s；失败仍仅为上文列出的 Bluesky/X/YouTube 四个既有固定日期 stale 断言。
+- 应用到目标工作树后运行：`uv run --offline --extra dev python -m pytest tests/test_final_recheck_regressions.py tests/test_final_review_regressions.py tests/test_intelligence_presentation.py tests/test_intelligence_diagnostics.py tests/test_webhook.py tests/test_logging_config.py tests/test_mcp_server.py -o addopts='' -q`，200 passed in 2.79s。
+- 报告更新前，目标暂存树与验证快照 tree 完全相等：`7b047e21992e4f11506983c0620abb73e7b4e52d`。补丁单独应用到工作区/暂存区，原 19 文件的未暂存差异仍 790 insertions / 23 deletions；无覆盖或误提交。
+- 仍待最终 reviewer 复验；原“称/昵称”Minor 未改，真实 AI 分类和飞书视觉/送达未验收。本轮未联网、调用真实 API、写配置中的 ledger、发送飞书、触发 Actions 或推送。

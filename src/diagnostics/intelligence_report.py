@@ -23,10 +23,17 @@ def build_intelligence_report(
 ) -> dict[str, Any]:
     fetch_report = fetch_report or {"status": "not_attempted", "sources": []}
     fetch_status = str(fetch_report.get("status") or "not_attempted")
-    analysis_failed = bool(candidates) and all(
+    # Preanalysis observations/rejections did not exercise the analysis stage.
+    analysis_attempts = [
+        candidate for candidate in candidates
+        if candidate.intelligence is not None
+        or candidate.status is CandidateStatus.PROCESSING_ERROR
+        or ReasonCode.ANALYSIS_FAILED in candidate.reason_codes
+    ]
+    analysis_failed = bool(analysis_attempts) and all(
         candidate.status is CandidateStatus.PROCESSING_ERROR
         or ReasonCode.ANALYSIS_FAILED in candidate.reason_codes
-        for candidate in candidates
+        for candidate in analysis_attempts
     )
     if fetch_status == "failure" or analysis_failed:
         pipeline_status = "pipeline_failed"
