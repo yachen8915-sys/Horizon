@@ -23,6 +23,7 @@ LANE_PRIORITY_BOOST = {
     DecisionLane.TECHNICAL_FRONTIER: 0.3,
     DecisionLane.PLATFORM_AI_CHANGE: 0.2,
     DecisionLane.HOT_CONTENT: 0.0,
+    DecisionLane.AI_INDUSTRY_SOCIETY: 0.1,
 }
 
 EVIDENCE_SORT = {
@@ -66,7 +67,20 @@ class IntelligenceSelector:
         eligible = []
         for candidate in eligible_with_analysis:
             assert candidate.intelligence is not None
-            if candidate.intelligence.score.total < self.config.minimum_score:
+            lane = candidate.intelligence.primary_lane
+            content_gate_owns_score = (
+                lane is DecisionLane.AI_INDUSTRY_SOCIETY
+                or (
+                    lane is DecisionLane.HOT_CONTENT
+                    and candidate.item.processing
+                    and candidate.item.processing.classification.profile
+                    == "pangmen-platform-trend-radar"
+                )
+            )
+            if (
+                not content_gate_owns_score
+                and candidate.intelligence.score.total < self.config.minimum_score
+            ):
                 result.rejected.append(
                     self._rejected(candidate, ReasonCode.LOW_QUALITY, observed_at)
                 )

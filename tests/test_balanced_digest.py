@@ -476,6 +476,21 @@ def test_high_operations_low_content_enters_watch_pool() -> None:
     assert result.items[0].metadata["trend_pool"] == "watch"
 
 
+def test_legacy_pool_helper_rejects_seven_without_hotspot_boost():
+    item = _set_trend_scores(
+        make_item("no-boost", 7, "platform-trend", "pangmen-platform-trend-radar"),
+        operations=7, content=6,
+    )
+    assert HorizonOrchestrator._assign_platform_trend_pool(item) is None
+    assert "trend_pool" not in item.metadata
+
+
+def test_legacy_brand_safety_helper_excludes_violence():
+    item = make_item("violence", 9, "platform-trend", "pangmen-platform-trend-radar")
+    item.title = "暴力事件"
+    assert HorizonOrchestrator._is_platform_trend_brand_safety_excluded(item)
+
+
 def test_low_operations_high_content_does_not_pass_platform_threshold() -> None:
     item = _set_trend_scores(
         make_item(
@@ -538,11 +553,11 @@ def test_platform_pool_limits_are_independent_upper_bounds() -> None:
             _set_trend_scores(
                 make_item(
                     f"leverage-{index}",
-                    8 - index / 100,
+                    9 - index / 100,
                     "platform-trend",
                     "pangmen-platform-trend-radar",
                 ),
-                operations=8 - index / 100,
+                operations=9 - index / 100,
                 content=8,
             )
         )
@@ -551,11 +566,11 @@ def test_platform_pool_limits_are_independent_upper_bounds() -> None:
             _set_trend_scores(
                 make_item(
                     f"watch-{index}",
-                    7 - index / 100,
+                    8.5 - index / 100,
                     "platform-trend",
                     "pangmen-platform-trend-radar",
                 ),
-                operations=7 - index / 100,
+                operations=8.5 - index / 100,
                 content=4,
             )
         )

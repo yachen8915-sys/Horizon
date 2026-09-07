@@ -64,6 +64,39 @@ def test_canonical_url_removes_tracking_without_losing_real_parameters() -> None
     ) == "https://example.com/update?id=42"
 
 
+def test_exact_merge_keeps_primary_metadata_and_all_provider_platform_evidence():
+    first = _candidate("first", url="https://example.com/one", event_key="same")
+    second = _candidate("second", url="https://example.com/two", event_key="same", authority="official")
+    first.item.metadata = {"provider": "DailyHotAPI", "platform": "weibo"}
+    second.item.metadata = {"provider": "ALAPI", "platform": "douyin", "rank": 20}
+    merged = merge_duplicate_group([first, second]).primary
+    assert merged.item.title == "second"
+    assert merged.item.metadata["provider"] == "ALAPI"
+    assert merged.item.metadata["rank"] == 20
+    assert merged.item.metadata["providers"] == ["alapi", "dailyhotapi"]
+    assert merged.item.metadata["platforms"] == ["douyin", "weibo"]
+    assert merge_duplicate_group([second, first]).primary.item.metadata == merged.item.metadata
+    assert "providers" not in first.item.metadata
+
+
+def test_merge_uses_normalized_fallbacks_and_preserves_previous_merged_arrays():
+    first = _candidate("first", url="https://example.com/one", event_key="same")
+    second = _candidate("second", url="https://example.com/two", event_key="same")
+    first.item.metadata = {"source_id": "rss:first", "content_platform": "web", "providers": ["ALAPI"]}
+    second.item.metadata = {"source_id": "rss:first", "content_platform": "web"}
+    merged = merge_duplicate_group([first, second]).primary
+    assert merged.item.metadata["providers"] == ["alapi", "rss:first"]
+    assert merged.item.metadata["platforms"] == ["web"]
+
+
+def test_similar_titles_do_not_create_exact_duplicate_group():
+    first = _candidate("first", url="https://example.com/one", event_key="talent:training")
+    second = _candidate("second", url="https://example.com/two", event_key="talent:campus")
+    first.item.title = "军训才艺大赏"
+    second.item.title = "校园才艺大赏"
+    assert len(group_duplicate_candidates([first, second])) == 2
+
+
 def test_same_event_across_sources_merges_into_stronger_official_record() -> None:
     media = _candidate(
         "media",

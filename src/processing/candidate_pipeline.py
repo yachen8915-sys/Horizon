@@ -18,7 +18,8 @@ from ..models import (
 )
 from .candidate_identity import canonicalize_url
 from .evidence import assess_claim_evidence
-from .intelligence_analysis import IntelligenceDraft, assess_hard_gates
+from .intelligence_analysis import IntelligenceDraft
+from .content_type_gate import assess_content_type_gate
 from .source_observation import normalize_source_observation
 
 
@@ -37,8 +38,9 @@ AUTHORITY_BY_SOURCE = {
 
 
 class CandidateBuilder:
-    def __init__(self, rule_version: str):
+    def __init__(self, rule_version: str, minimum_score: float = 6.3):
         self.rule_version = rule_version
+        self.minimum_score = minimum_score
 
     def from_preanalysis_item(self, item: ContentItem) -> CandidateRecord:
         item = normalize_source_observation(item)
@@ -97,7 +99,7 @@ class CandidateBuilder:
         )
 
         try:
-            draft = IntelligenceDraft(
+            IntelligenceDraft(
                 primary_lane=intelligence.primary_lane,
                 content_kind=intelligence.content_kind,
                 novelty_basis=intelligence.novelty_basis,
@@ -115,20 +117,60 @@ class CandidateBuilder:
                 status=CandidateStatus.PROCESSING_ERROR,
                 reason_codes=[ReasonCode.ANALYSIS_FAILED],
             )
-        gate = assess_hard_gates(draft)
-        if gate.accepted:
-            status = CandidateStatus.ELIGIBLE
-            reasons = [ReasonCode.PASSED_HARD_GATES]
-        else:
-            status = CandidateStatus.REJECTED
-            reasons = [self._reason_code(gate.reason)]
         return self._base_candidate(
             item,
-            status=status,
-            reason_codes=reasons,
+            status=CandidateStatus.ENRICHED,
+            reason_codes=[],
             intelligence=intelligence,
             evidence_status=evidence_status,
             evidence_refs=[reference],
+        )
+
+    def apply_content_type_gate(self, candidate: CandidateRecord) -> CandidateRecord:
+        if candidate.status is not CandidateStatus.ENRICHED:
+            return candidate.model_copy(deep=True)
+        intelligence = candidate.intelligence
+        assert intelligence is not None
+        draft = IntelligenceDraft(
+            primary_lane=intelligence.primary_lane,
+            content_kind=intelligence.content_kind,
+            novelty_basis=intelligence.novelty_basis,
+            direct_impacts=intelligence.direct_impacts,
+            decision_summary=intelligence.decision_summary,
+            content_summary=intelligence.content_summary,
+            evidence_status=intelligence.evidence_status,
+            dimensions=intelligence.score,
+            claims=intelligence.claims,
+            evidence_refs=intelligence.evidence_refs,
+        )
+        gate = assess_content_type_gate(
+            candidate.item, draft, minimum_score=self.minimum_score
+        )
+        status = CandidateStatus.ELIGIBLE if gate.accepted else CandidateStatus.REJECTED
+        item = candidate.item.model_copy(deep=True)
+        item.metadata.pop("trend_pool", None)
+        item.metadata.pop("pending_verification", None)
+        if gate.accepted:
+            if gate.trend_pool is not None:
+                item.metadata["trend_pool"] = gate.trend_pool
+            if gate.pending_verification:
+                item.metadata["pending_verification"] = True
+        return candidate.model_copy(
+            update={
+                "item": item,
+                "status": status,
+                "reason_codes": [*candidate.reason_codes, gate.reason],
+                "status_history": [
+                    *candidate.status_history,
+                    CandidateStatusTransition(
+                        from_status=candidate.status,
+                        to_status=status,
+                        changed_at=candidate.updated_at,
+                        reason_code=gate.reason,
+                    ),
+                ],
+            },
+            deep=True,
         )
 
     def _base_candidate(
@@ -214,13 +256,3 @@ class CandidateBuilder:
         if item.source_type is SourceType.RSS and category.startswith("official-"):
             return "official"
         return AUTHORITY_BY_SOURCE.get(item.source_type, "secondary")
-
-    @staticmethod
-    def _reason_code(reason: str) -> ReasonCode:
-        if reason in {"evidence_insufficient", "evidence_disputed"}:
-            return ReasonCode.EVIDENCE_INSUFFICIENT
-        if reason == "low_propagation":
-            return ReasonCode.LOW_PROPAGATION
-        if reason in {"low_relevance", "no_direct_decision_impact"}:
-            return ReasonCode.LOW_RELEVANCE
-        return ReasonCode.LOW_QUALITY

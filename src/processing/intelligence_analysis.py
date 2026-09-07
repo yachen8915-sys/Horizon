@@ -119,7 +119,11 @@ def calculate_weighted_score(
     return round(total, 3)
 
 
-def assess_hard_gates(draft: IntelligenceDraft) -> HardGateResult:
+def assess_hard_gates(
+    draft: IntelligenceDraft,
+    *,
+    minimum_score: float = 6.5,
+) -> HardGateResult:
     if draft.content_kind in {"financing", "personnel"} and not draft.direct_impacts:
         return HardGateResult(False, "no_direct_decision_impact")
     if draft.evidence_status is EvidenceStatus.DISPUTED:
@@ -138,7 +142,7 @@ def assess_hard_gates(draft: IntelligenceDraft) -> HardGateResult:
         and draft.dimensions.propagation_quality < 5
     ):
         return HardGateResult(False, "low_propagation")
-    if calculate_weighted_score(draft.primary_lane, draft.dimensions) < 6.5:
+    if calculate_weighted_score(draft.primary_lane, draft.dimensions) < minimum_score:
         return HardGateResult(False, "low_weighted_score")
     return HardGateResult(True, "passed_hard_gates")
 

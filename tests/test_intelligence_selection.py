@@ -94,6 +94,19 @@ def test_product_decisions_are_prioritized_when_scores_are_close() -> None:
     )
 
 
+def test_admitted_industry_at_six_survives_legacy_threshold_and_sorting():
+    candidate = _candidate("industry", lane=DecisionLane.AI_INDUSTRY_SOCIETY, total=6)
+    result = _selector(minimum_score=6.3).select([candidate], now=NOW)
+    assert [row.candidate_id for row in result.selected] == ["industry"]
+
+
+def test_strict_lane_still_rejected_by_legacy_minimum_score():
+    candidate = _candidate("product", lane=DecisionLane.PRODUCT_CAPABILITY, total=6)
+    result = _selector(minimum_score=6.3).select([candidate], now=NOW)
+    assert result.selected == []
+    assert result.rejected[0].reason_codes[-1].value == "low_quality"
+
+
 def test_selector_does_not_fill_target_with_low_quality_items() -> None:
     candidates = [
         _candidate(

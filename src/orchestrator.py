@@ -71,6 +71,11 @@ from .processing.candidate_identity import (
     merge_duplicate_group,
 )
 from .processing.candidate_pipeline import CandidateBuilder
+from .processing.content_type_gate import (
+    CORE_TREND_PLATFORMS as _CORE_TREND_PLATFORMS,
+    assign_platform_trend_pool,
+    is_brand_safety_excluded,
+)
 from .processing.intelligence_selection import IntelligenceSelector
 from .processing.delivery_selection import DeliverySelector
 from .processing.intelligence_brief import render_intelligence_brief
@@ -96,25 +101,6 @@ _TRACKING_QUERY_PARAMETERS = {
 }
 
 _PLATFORM_TREND_PROFILE_ID = "pangmen-platform-trend-radar"
-_CORE_TREND_PLATFORMS = {"weibo", "douyin", "xiaohongshu", "wechat"}
-_PLATFORM_TREND_LEVERAGE_THRESHOLD = 7.0
-_PLATFORM_TREND_BRAND_SAFETY_TERMS = {
-    "政治敏感",
-    "自然灾害",
-    "灾难",
-    "台风",
-    "地震",
-    "洪水",
-    "山火",
-    "重大事故",
-    "严重事故",
-    "伤亡",
-    "遇难",
-    "逝世",
-    "去世",
-    "身亡",
-    "离世",
-}
 
 _TOPIC_ENTITY_ALIASES = {
     "deepseek": "deepseek",
@@ -1569,7 +1555,10 @@ class HorizonOrchestrator:
         self,
         items: List[ContentItem],
     ) -> FilteringPipelineResult:
-        builder = CandidateBuilder(self.config.intelligence.rule_version)
+        builder = CandidateBuilder(
+            self.config.intelligence.rule_version,
+            minimum_score=self.config.intelligence.selection.minimum_score,
+        )
         store = CandidateStore(Path(self.config.intelligence.candidate_store_file))
         historical_candidates = store.all_latest()
         historical_by_id = {
@@ -1598,30 +1587,40 @@ class HorizonOrchestrator:
             )
             for candidate in analyzed_candidates
         ]
-        eligible = [
+        enriched = [
             candidate
             for candidate in analyzed_candidates
-            if candidate.status is CandidateStatus.ELIGIBLE
+            if candidate.status is CandidateStatus.ENRICHED
         ]
         noneligible = [
             candidate
             for candidate in analyzed_candidates
-            if candidate.status is not CandidateStatus.ELIGIBLE
+            if candidate.status is not CandidateStatus.ENRICHED
         ]
 
         primary_candidates = []
         merged_candidates = []
-        for group in group_duplicate_candidates(eligible):
+        for group in group_duplicate_candidates(enriched):
             merge_result = merge_duplicate_group(group)
-            primary_candidates.append(merge_result.primary)
+            primary_candidates.append(
+                builder.apply_content_type_gate(merge_result.primary)
+            )
             merged_candidates.extend(merge_result.duplicates)
+        eligible = [
+            candidate for candidate in primary_candidates
+            if candidate.status is CandidateStatus.ELIGIBLE
+        ]
+        noneligible.extend(
+            candidate for candidate in primary_candidates
+            if candidate.status is CandidateStatus.REJECTED
+        )
 
         delivery_history = DeliveryStore(
             Path(self.config.intelligence.delivery_store_file)
         ).all()
         selection = IntelligenceSelector(
             self.config.intelligence.selection
-        ).select(primary_candidates, deliveries=delivery_history)
+        ).select(eligible, deliveries=delivery_history)
         all_candidates = [
             *preanalysis_candidates,
             *noneligible,
@@ -1654,7 +1653,7 @@ class HorizonOrchestrator:
             topic_dedup_count=len(primary_candidates),
             topic_dedup_removed=len(merged_candidates),
             balanced_digest=balanced,
-            eligible_count=len(primary_candidates),
+            eligible_count=len(eligible),
             eligible_items=selectable_items,
             exclusion_stages=exclusions,
         )
@@ -2228,15 +2227,7 @@ class HorizonOrchestrator:
 
     @staticmethod
     def _is_platform_trend_brand_safety_excluded(item: ContentItem) -> bool:
-        analysis = item.processing.analysis if item.processing else None
-        signals = [item.title]
-        if analysis:
-            signals.extend(analysis.tags)
-        normalized = " ".join(str(signal) for signal in signals).lower()
-        return any(
-            term.lower() in normalized
-            for term in _PLATFORM_TREND_BRAND_SAFETY_TERMS
-        )
+        return is_brand_safety_excluded(item)
 
     @staticmethod
     def _platform_trend_heat_boost(item: ContentItem) -> float:
@@ -2283,36 +2274,10 @@ class HorizonOrchestrator:
 
     @staticmethod
     def _assign_platform_trend_pool(item: ContentItem) -> Optional[str]:
-        profile_id = (
-            item.processing.classification.profile if item.processing else item.profile
-        )
-        if profile_id != _PLATFORM_TREND_PROFILE_ID or not item.processing:
-            return None
-        analysis = item.processing.analysis
-        if analysis is None:
-            return None
-        operations_score = (
-            analysis.operations_score
-            if analysis.operations_score is not None
-            else analysis.score
-        )
-        content_score = (
-            analysis.content_opportunity_score
-            if analysis.content_opportunity_score is not None
-            else analysis.score
-        )
-        if operations_score is not None:
-            analysis.score = operations_score
-            analysis.operations_score = operations_score
-        if content_score is not None:
-            analysis.content_opportunity_score = content_score
-        pool = (
-            "leverage"
-            if content_score is not None
-            and content_score >= _PLATFORM_TREND_LEVERAGE_THRESHOLD
-            else "watch"
-        )
-        item.metadata["trend_pool"] = pool
+        pool = assign_platform_trend_pool(item)
+        item.metadata.pop("trend_pool", None)
+        if pool is not None:
+            item.metadata["trend_pool"] = pool
         return pool
 
     @staticmethod

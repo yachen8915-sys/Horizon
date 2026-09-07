@@ -14,6 +14,7 @@ from ..models import (
     ReasonCode,
 )
 from .evidence import assess_claim_evidence
+from .source_observation import normalize_source_observation
 
 
 TRACKING_PARAMETERS = {
@@ -110,6 +111,27 @@ def merge_duplicate_group(group: list[CandidateRecord]) -> CandidateMergeResult:
     if not group:
         raise ValueError("cannot merge an empty candidate group")
     primary_source = max(group, key=_candidate_strength)
+    metadata = dict(primary_source.item.metadata)
+    for plural, singular, fallback in (
+        ("providers", "provider", "source_id"),
+        ("platforms", "platform", "content_platform"),
+    ):
+        values: set[str] = set()
+        for candidate in group:
+            observed = normalize_source_observation(candidate.item).metadata
+            raw_values = observed.get(plural)
+            if isinstance(raw_values, (list, tuple, set)):
+                values.update(
+                    str(value).strip().casefold()
+                    for value in raw_values
+                    if value and str(value).strip()
+                )
+            value = str(
+                observed.get(singular) or observed.get(fallback) or ""
+            ).strip().casefold()
+            if value:
+                values.add(value)
+        metadata[plural] = sorted(values)
     evidence_by_key: dict[tuple[str, str], EvidenceReference] = {}
     for candidate in group:
         for reference in candidate.evidence_refs:
@@ -139,6 +161,9 @@ def merge_duplicate_group(group: list[CandidateRecord]) -> CandidateMergeResult:
         )
     primary = primary_source.model_copy(
         update={
+            "item": primary_source.item.model_copy(
+                update={"metadata": metadata}, deep=True
+            ),
             "evidence_refs": combined_references,
             "evidence_status": evidence_status,
             "intelligence": intelligence,

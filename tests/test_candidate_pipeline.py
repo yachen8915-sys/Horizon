@@ -69,8 +69,11 @@ def _item(with_intelligence: bool = True) -> ContentItem:
     )
 
 
-def test_builder_turns_valid_analysis_into_eligible_candidate() -> None:
-    candidate = CandidateBuilder("v1").from_analyzed_item(_item())
+def test_builder_turns_valid_analysis_into_enriched_then_eligible_candidate() -> None:
+    builder = CandidateBuilder("v1")
+    enriched = builder.from_analyzed_item(_item())
+    assert enriched.status is CandidateStatus.ENRICHED
+    candidate = builder.apply_content_type_gate(enriched)
 
     assert candidate.status is CandidateStatus.ELIGIBLE
     assert candidate.canonical_url == "https://example.com/update"
@@ -78,6 +81,7 @@ def test_builder_turns_valid_analysis_into_eligible_candidate() -> None:
     assert candidate.reason_codes == [ReasonCode.PASSED_HARD_GATES]
     assert candidate.evidence_refs[0].authority == "official"
     assert [step.to_status for step in candidate.status_history] == [
+        CandidateStatus.ENRICHED,
         CandidateStatus.ELIGIBLE
     ]
 
@@ -250,6 +254,7 @@ def test_observing_candidate_keeps_lifecycle_when_it_later_becomes_selected(
     assert selected.status is CandidateStatus.SELECTED
     assert [step.to_status for step in selected.status_history] == [
         CandidateStatus.OBSERVING,
+        CandidateStatus.ENRICHED,
         CandidateStatus.ELIGIBLE,
         CandidateStatus.SELECTED,
     ]
@@ -267,7 +272,8 @@ def test_aggregator_cannot_self_promote_unverified_claim_to_confirmed() -> None:
     )
     item = ContentItem.model_validate(payload)
 
-    candidate = CandidateBuilder("v1").from_analyzed_item(item)
+    builder = CandidateBuilder("v1")
+    candidate = builder.apply_content_type_gate(builder.from_analyzed_item(item))
 
     assert candidate.evidence_status is EvidenceStatus.UNVERIFIED
     assert candidate.intelligence is not None
@@ -283,7 +289,8 @@ def test_official_source_is_programmatically_confirmed() -> None:
     assert item.processing.analysis.intelligence is not None
     item.processing.analysis.intelligence.evidence_status = EvidenceStatus.UNVERIFIED
 
-    candidate = CandidateBuilder("v1").from_analyzed_item(item)
+    builder = CandidateBuilder("v1")
+    candidate = builder.apply_content_type_gate(builder.from_analyzed_item(item))
 
     assert candidate.evidence_status is EvidenceStatus.CONFIRMED
     assert candidate.status is CandidateStatus.ELIGIBLE
