@@ -8,7 +8,7 @@ from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 from .localization import normalize_language
-from ..models import ContentItem
+from ..models import CandidateRecord, ContentItem
 
 
 _CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -725,6 +725,48 @@ class DailySummarizer:
             sections.append("\n".join(entries))
 
         return normalize_language(header + "\n\n".join(sections), language)
+
+    def generate_intelligence_item(
+        self,
+        candidate: CandidateRecord,
+        language: str,
+        index: int,
+        total: int,
+        *,
+        title: str | None = None,
+    ) -> str:
+        """Render candidate detail without assigning a source-based section."""
+        item = candidate.item
+        analysis = candidate.intelligence
+        parts = []
+        if analysis:
+            parts.extend([
+                f"**为什么值得看：** {analysis.decision_summary}",
+                analysis.content_summary,
+            ])
+        parts.append(self.generate_webhook_item(
+            item, language, index, total, title=title,
+            score=analysis.score.total if analysis else None,
+        ))
+        metadata = item.metadata
+        providers = metadata.get("providers", [])
+        if not isinstance(providers, list):
+            providers = []
+        sources = [
+            metadata.get(key)
+            for key in ("provider", "provider_name", "source_kind", "feed_name")
+        ]
+        sources.extend([*providers, item.author])
+        source_text = " · ".join(
+            dict.fromkeys(
+                _escape_markdown(value)
+                for value in sources
+                if isinstance(value, str) and value
+            )
+        )
+        if source_text:
+            parts.append(f"来源：{source_text}")
+        return "\n\n".join(parts)
 
     def generate_webhook_item(
         self,

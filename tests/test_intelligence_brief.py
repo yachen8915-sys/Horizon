@@ -26,6 +26,7 @@ def _candidate(candidate_id: str, lane: DecisionLane) -> CandidateRecord:
             title=f"Title {candidate_id}",
             url=f"https://example.com/{candidate_id}",
             published_at=NOW,
+            profile="pangmen-platform-trend-radar" if lane is DecisionLane.HOT_CONTENT else None,
         ),
         status=CandidateStatus.SELECTED,
         discovered_at=NOW,
@@ -43,7 +44,7 @@ def _candidate(candidate_id: str, lane: DecisionLane) -> CandidateRecord:
     )
 
 
-def test_brief_is_grouped_by_decision_lane_not_legacy_columns() -> None:
+def test_brief_is_grouped_by_content_sections_not_source_columns() -> None:
     brief = render_intelligence_brief(
         [
             _candidate("product", DecisionLane.PRODUCT_CAPABILITY),
@@ -56,10 +57,10 @@ def test_brief_is_grouped_by_decision_lane_not_legacy_columns() -> None:
         total_fetched=100,
     )
 
-    assert "产品与能力判断" in brief
-    assert "热门内容与选题机会" in brief
-    assert "技术前沿判断" in brief
-    assert "平台与 AI 生态变化" in brief
+    assert "AI 产品与应用" in brief
+    assert "今日可借势" in brief
+    assert "AI 技术与模型" in brief
+    assert "平台变化雷达" in brief
     assert "AI 应用" not in brief
     assert "AI 媒体" not in brief
     assert "**为什么值得看：** Decision product" in brief
@@ -90,5 +91,5 @@ def test_brief_keeps_capacity_tail_in_more_section() -> None:
         total_fetched=10,
     )
 
-    assert "查看更多（1 条）" in brief
+    assert "## 查看更多热点" in brief
     assert "[Title more](https://example.com/more)" in brief

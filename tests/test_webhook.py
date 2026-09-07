@@ -1228,7 +1228,7 @@ class TestSendDailySummary:
         assert "AI HOT 条目 16" in more[0]["elements"][0]["content"]
         del os.environ[_TEST_URL_ENV]
 
-    def test_feishu_collapsible_renders_ai_media_category(self):
+    def test_feishu_collapsible_keeps_media_items_in_content_category_once(self):
         os.environ[_TEST_URL_ENV] = _TEST_URL
         config = WebhookConfig(
             enabled=True,
@@ -1259,14 +1259,14 @@ class TestSendDailySummary:
         )[0]
         elements = message["_request_body_override"]["card"]["body"]["elements"]
 
-        assert "### AI 媒体" in [
+        assert "### AI 媒体" not in [
             element["content"] for element in elements if element["tag"] == "markdown"
         ]
-        assert any(
+        assert sum(
             element["tag"] == "collapsible_panel"
             and "热门 AI 帖子 0" in element["header"]["title"]["content"]
             for element in elements
-        )
+        ) == 1
         del os.environ[_TEST_URL_ENV]
 
     def test_feishu_collapsible_groups_profiles_and_resets_numbering(self):

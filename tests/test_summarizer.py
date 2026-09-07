@@ -93,6 +93,21 @@ def test_generate_webhook_item_renders_single_item_detail():
     assert "**Tags**: `#AI`, `#News`" in result
 
 
+def test_intelligence_item_keeps_provider_media_author_as_detail_metadata():
+    from src.models import DecisionLane
+    from tests.test_intelligence_brief import _candidate
+
+    candidate = _candidate("GPT-6", DecisionLane.PRODUCT_CAPABILITY)
+    candidate.item = _make_item(1)
+    candidate.item.metadata.update(ai_media_candidate=True, provider="AI HOT",
+        providers=["DailyHotAPI", "ALAPI"], source_kind="X 推文", feed_name="Example Media")
+    detail = DailySummarizer().generate_intelligence_item(candidate, "zh", 1, 1)
+    for value in ["AI HOT", "DailyHotAPI", "ALAPI", "X 推文", "Example Media", "tester",
+                  "Decision GPT-6", "Content GPT-6"]:
+        assert value in detail
+    assert "### AI 媒体" not in detail
+
+
 def test_generate_webhook_item_includes_discussion_link_when_distinct():
     summarizer = DailySummarizer()
     item = _make_item(1)

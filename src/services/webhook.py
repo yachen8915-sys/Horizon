@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from ..ai.markdown_utils import clean_app_summary_markdown
+from ..models import CandidateRecord
+from ..processing.intelligence_presentation import build_intelligence_presentation
 from ..console_icons import get_icons
 from ..models import ContentItem, WebhookConfig
 from ..ai.summarizer import DailySummarizer
@@ -490,8 +492,15 @@ class WebhookNotifier:
         summarizer: DailySummarizer,
         topic_radar: bool,
         content_radar: bool = False,
+        intelligence_candidates: list[CandidateRecord] | None = None,
+        intelligence_more_candidates: list[CandidateRecord] | None = None,
     ) -> dict[str, Any]:
         """Build a single Feishu Card JSON 2.0 message with collapsed item details."""
+        if intelligence_candidates is not None or intelligence_more_candidates is not None:
+            return self._build_feishu_intelligence_body(
+                intelligence_candidates or [], intelligence_more_candidates or [],
+                all_items_count=all_items_count, date=date, lang=lang, summarizer=summarizer,
+            )
         overview = self._build_feishu_collapsible_overview(
             item_count=len(important_items),
             all_items_count=all_items_count,
@@ -512,16 +521,9 @@ class WebhookNotifier:
                 else item.profile
             ) in ai_profiles
         ]
-        ai_media_items = [
-            item for item in ai_items if item.metadata.get("ai_media_candidate") is True
-        ]
-        editorial_ai_items = [item for item in ai_items if item not in ai_media_items]
-        detail_ai_items = editorial_ai_items[:16]
-        detail_ai_media_items = ai_media_items[:8]
-        more_ai_items = editorial_ai_items[16:] + ai_media_items[8:]
-        detail_ids = {
-            item.id for item in [*detail_ai_items, *detail_ai_media_items]
-        }
+        detail_ai_items = ai_items[:16]
+        more_ai_items = ai_items[16:]
+        detail_ids = {item.id for item in detail_ai_items}
         display_items = [
             item
             for item in important_items
@@ -568,11 +570,6 @@ class WebhookNotifier:
             add_panels(grouped.get("pangmen-topic-radar"))
             elements.append(_markdown("### AI 技术"))
             add_panels(grouped.get("pangmen-ai-tech-radar"))
-            if detail_ai_media_items:
-                elements.append(_markdown("### AI 媒体"))
-                media_view = summarizer.build_view(detail_ai_media_items, lang)
-                for media_group in media_view.groups:
-                    add_panels(media_group)
             if more_ai_items:
                 compact_lines = []
                 for item in more_ai_items:
@@ -732,6 +729,60 @@ class WebhookNotifier:
             },
         }
 
+    def _build_feishu_intelligence_body(
+        self,
+        selected: list[CandidateRecord],
+        more: list[CandidateRecord],
+        *,
+        all_items_count: int,
+        date: str,
+        lang: str,
+        summarizer: DailySummarizer,
+    ) -> dict[str, Any]:
+        presentation = build_intelligence_presentation(selected, more)
+        elements = [_markdown(self._build_feishu_collapsible_overview(
+            item_count=len(selected), all_items_count=all_items_count,
+            date=date, lang=lang, topic_radar=False, content_radar=True,
+        ))]
+        for heading, candidates in presentation.sections():
+            elements.append(_markdown(heading))
+            compact = candidates is presentation.more_ai or candidates is presentation.more_hot
+            if compact:
+                lines = []
+                for candidate in candidates:
+                    analysis = candidate.intelligence
+                    value = " ".join(analysis.decision_summary.split()) if analysis else ""
+                    if len(value) > 120:
+                        value = value[:117].rstrip() + "..."
+                    lines.append(f"- [{candidate.item.title}]({candidate.item.url}) — {value}")
+                elements.append(_collapsible_panel(
+                    f"{heading.removeprefix('## ')}（{len(candidates)}条）", "\n".join(lines)))
+                continue
+            for index, candidate in enumerate(candidates, start=1):
+                item = candidate.item
+                artifact = item.processing.artifacts.get(lang) if item.processing else None
+                title = artifact.title if artifact else item.title
+                score = candidate.intelligence.score.total if candidate.intelligence else None
+                suffix = f" ⭐️ {score:.1f}/10" if score is not None and candidates is not presentation.hot_watch else ""
+                elements.append(_collapsible_panel(
+                    f"{index}. {title}{suffix}",
+                    _format_markdown_for_webhook(summarizer.generate_intelligence_item(
+                        candidate, lang, index, len(candidates), title=title)),
+                ))
+        return {
+            "msg_type": "interactive",
+            "card": {
+                "schema": "2.0",
+                "config": {"wide_screen_mode": True, "update_multi": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": self._feishu_collapsible_title(
+                        date, lang, False, True)},
+                    "template": "blue",
+                },
+                "body": {"elements": elements},
+            },
+        }
+
     def build_preview(self, variables: dict) -> dict[str, Any]:
         """Build the fully rendered request for dry-run preview."""
         request_url, body_content, headers = self._render_request_components(variables)
@@ -749,6 +800,8 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        intelligence_candidates: list[CandidateRecord] | None = None,
+        intelligence_more_candidates: list[CandidateRecord] | None = None,
     ) -> List[dict[str, Any]]:
         """Build the variables for all webhook messages for one language."""
         webhook_languages = getattr(self.config, "languages", None)
@@ -801,6 +854,8 @@ class WebhookNotifier:
                         summarizer=summarizer,
                         topic_radar=topic_radar,
                         content_radar=content_radar,
+                        intelligence_candidates=intelligence_candidates,
+                        intelligence_more_candidates=intelligence_more_candidates,
                     ),
                 }
             ]
@@ -1089,6 +1144,8 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        intelligence_candidates: list[CandidateRecord] | None = None,
+        intelligence_more_candidates: list[CandidateRecord] | None = None,
     ) -> list[WebhookDeliveryResult]:
         """Send daily summary webhook notification.
 
@@ -1110,6 +1167,8 @@ class WebhookNotifier:
             date=date,
             lang=lang,
             summarizer=summarizer,
+            intelligence_candidates=intelligence_candidates,
+            intelligence_more_candidates=intelligence_more_candidates,
         )
         if not messages:
             self.console.print(

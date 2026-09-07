@@ -2,17 +2,8 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-
-from ..models import CandidateRecord, DecisionLane, RadarRunMode
-
-
-LANE_LABELS = {
-    DecisionLane.PRODUCT_CAPABILITY: "产品与能力判断",
-    DecisionLane.HOT_CONTENT: "热门内容与选题机会",
-    DecisionLane.TECHNICAL_FRONTIER: "技术前沿判断",
-    DecisionLane.PLATFORM_AI_CHANGE: "平台与 AI 生态变化",
-}
+from ..models import CandidateRecord, RadarRunMode
+from .intelligence_presentation import build_intelligence_presentation
 
 EVIDENCE_LABELS = {
     "confirmed": "已确认",
@@ -43,22 +34,22 @@ def render_intelligence_brief(
         "",
         f"精选 {len(candidates)} 条 / 抓取 {total_fetched} 条",
     ]
-    grouped: dict[DecisionLane, list[CandidateRecord]] = defaultdict(list)
-    for candidate in candidates:
-        if candidate.intelligence is not None:
-            grouped[candidate.intelligence.primary_lane].append(candidate)
-
-    for lane in DecisionLane:
-        lane_candidates = grouped.get(lane, [])
-        if not lane_candidates:
-            continue
-        lines.extend(["", f"## {LANE_LABELS[lane]}", ""])
-        for candidate in lane_candidates:
+    presentation = build_intelligence_presentation(candidates, more_candidates or [])
+    for heading, section_candidates in presentation.sections():
+        lines.extend(["", heading, ""])
+        compact = (
+            section_candidates is presentation.more_ai
+            or section_candidates is presentation.more_hot
+        )
+        for candidate in section_candidates:
+            title = _escape_link_text(candidate.item.title)
+            evidence = EVIDENCE_LABELS[candidate.evidence_status.value]
+            if compact:
+                lines.append(f"- [{title}]({candidate.item.url})｜{evidence}")
+                continue
             analysis = candidate.intelligence
             if analysis is None:
                 continue
-            title = _escape_link_text(candidate.item.title)
-            evidence = EVIDENCE_LABELS[candidate.evidence_status.value]
             lines.extend(
                 [
                     f"### [{title}]({candidate.item.url})",
@@ -70,14 +61,6 @@ def render_intelligence_brief(
                     f"证据：{evidence}｜评分：{analysis.score.total:.1f}",
                     "",
                 ]
-            )
-    if more_candidates:
-        lines.extend(["", f"## 查看更多（{len(more_candidates)} 条）", ""])
-        for candidate in more_candidates:
-            title = _escape_link_text(candidate.item.title)
-            evidence = EVIDENCE_LABELS[candidate.evidence_status.value]
-            lines.append(
-                f"- [{title}]({candidate.item.url})｜{evidence}"
             )
     return "\n".join(lines).rstrip() + "\n"
 

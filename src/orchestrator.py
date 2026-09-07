@@ -816,6 +816,16 @@ class HorizonOrchestrator:
                         date=today,
                         lang=lang,
                         summarizer=summarizer,
+                        intelligence_candidates=(
+                            delivery_selection.candidates
+                            if self.config.intelligence.enabled
+                            else None
+                        ),
+                        intelligence_more_candidates=(
+                            delivery_selection.more_candidates
+                            if self.config.intelligence.enabled
+                            else None
+                        ),
                     )
 
             if self.config.intelligence.enabled:
