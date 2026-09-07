@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+import logging
 
 from ..models import CandidateRecord, DecisionLane
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,8 @@ class IntelligencePresentation:
     platform_changes: list[CandidateRecord] = field(default_factory=list)
     more_ai: list[CandidateRecord] = field(default_factory=list)
     more_hot: list[CandidateRecord] = field(default_factory=list)
+    # Retain malformed candidates for diagnostics; never assign them a guessed section.
+    unmapped: list[CandidateRecord] = field(default_factory=list)
 
     def sections(self) -> Iterator[tuple[str, list[CandidateRecord]]]:
         """Yield the same nonempty sections, in display order, to every renderer."""
@@ -62,7 +67,9 @@ def build_intelligence_presentation(
                 raise ValueError(f"Duplicate presentation candidate: {candidate.candidate_id}")
             seen.add(candidate.candidate_id)
             if candidate.intelligence is None:
-                raise ValueError(f"Unmapped presentation candidate without analysis: {candidate.candidate_id}")
+                logger.warning("Unmapped presentation candidate without analysis: %s", candidate.candidate_id)
+                presentation.unmapped.append(candidate)
+                continue
             lane = candidate.intelligence.primary_lane
             section = lane_sections.get(lane)
             if section is None:
@@ -73,13 +80,15 @@ def build_intelligence_presentation(
                 )
                 if profile == "pangmen-platform-change-radar":
                     section = "platform_changes"
-                elif profile == "pangmen-platform-trend-radar":
+                elif lane is DecisionLane.HOT_CONTENT:
                     pool = candidate.item.metadata.get("trend_pool", "leverage")
                     section = {
                         "leverage": "hot_leverage", "watch": "hot_watch"
-                    }.get(pool)
+                    }.get(pool) if isinstance(pool, str) else None
             if section is None:
-                raise ValueError(f"Unmapped presentation candidate: {candidate.candidate_id}")
+                logger.warning("Unmapped presentation candidate: %s", candidate.candidate_id)
+                presentation.unmapped.append(candidate)
+                continue
             ai_overflow = not compact and section in ai_sections and ai_detail_count >= 16
             if compact or ai_overflow:
                 section = (

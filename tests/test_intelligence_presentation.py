@@ -43,7 +43,7 @@ def test_shared_presentation_maps_all_sections_once_with_lane_priority():
         "ai_product": ["GPT-6"], "ai_technical": ["technical"],
         "ai_industry": ["industry"], "hot_leverage": ["leverage"],
         "hot_watch": ["watch"], "platform_changes": ["platform"],
-        "more_ai": ["more-ai"], "more_hot": ["more-hot"],
+        "more_ai": ["more-ai"], "more_hot": ["more-hot"], "unmapped": [],
     }
     assert len({value for values in actual.values() for value in values}) == 8
 
@@ -56,14 +56,13 @@ def test_presentation_rejects_duplicate_membership_across_tiers():
         build_intelligence_presentation([candidate], [candidate])
 
 
-def test_presentation_rejects_unmapped_candidates_without_source_guessing():
+def test_presentation_maps_hot_lane_without_source_guessing():
     from src.processing.intelligence_presentation import build_intelligence_presentation
 
     candidate = _candidate("unknown", DecisionLane.HOT_CONTENT)
     candidate.item.profile = None
     candidate.item.metadata.update(provider="DailyHotAPI", ai_media_candidate=True)
-    with pytest.raises(ValueError, match="Unmapped"):
-        build_intelligence_presentation([candidate], [])
+    assert build_intelligence_presentation([candidate], []).hot_leverage == [candidate]
 
 
 def test_presentation_uses_platform_change_profile_as_fallback():
@@ -74,13 +73,14 @@ def test_presentation_uses_platform_change_profile_as_fallback():
     assert build_intelligence_presentation([candidate], []).platform_changes == [candidate]
 
 
-def test_presentation_rejects_missing_analysis_instead_of_silently_losing_content():
+def test_presentation_retains_missing_analysis_instead_of_silently_losing_content():
     from src.processing.intelligence_presentation import build_intelligence_presentation
 
     candidate = _candidate("missing-analysis", DecisionLane.HOT_CONTENT)
     candidate.intelligence = None
-    with pytest.raises(ValueError, match="Unmapped"):
-        build_intelligence_presentation([candidate], [])
+    presentation = build_intelligence_presentation([candidate], [])
+    assert presentation.unmapped == [candidate]
+    assert list(presentation.sections()) == []
 
 
 def test_markdown_uses_exact_presentation_headings():

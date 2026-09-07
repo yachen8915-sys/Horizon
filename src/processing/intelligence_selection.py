@@ -123,15 +123,6 @@ class IntelligenceSelector:
                     self._held(candidate, ReasonCode.DUPLICATE, observed_at)
                 )
                 continue
-            if not is_platform_trend and len(result.selected) >= self.config.max_items:
-                # The more tier must obey the same cross-lane identity boundary.
-                other_topics.add(topic)
-                if candidate.event_key:
-                    other_events.add(candidate.event_key)
-                result.held.append(
-                    self._held(candidate, ReasonCode.HELD_BY_CAPACITY, observed_at)
-                )
-                continue
             is_unverified_hot = bool(
                 not is_platform_trend
                 and candidate.intelligence
@@ -203,6 +194,17 @@ class IntelligenceSelector:
                     self._held(candidate, ReasonCode.HELD_BY_DIVERSITY, observed_at)
                 )
                 continue
+            if len(result.selected) >= self.config.max_items:
+                # Only qualified, fresh, deduplicated candidates may enter more.
+                other_topics.add(topic)
+                topic_counts[topic] += 1
+                if candidate.event_key:
+                    other_events.add(candidate.event_key)
+                    event_counts[candidate.event_key] += 1
+                result.held.append(
+                    self._held(candidate, ReasonCode.HELD_BY_CAPACITY, observed_at)
+                )
+                continue
             if exceeds:
                 result.soft_limit_overrides.append(candidate.candidate_id)
 
@@ -263,7 +265,11 @@ class IntelligenceSelector:
             candidate.item.processing.classification.profile
             if candidate.item.processing else candidate.item.profile
         )
-        return profile == "pangmen-platform-trend-radar"
+        return bool(
+            profile == "pangmen-platform-trend-radar"
+            and candidate.intelligence
+            and candidate.intelligence.primary_lane is DecisionLane.HOT_CONTENT
+        )
 
     @staticmethod
     def _native_number(value: object) -> float | None:

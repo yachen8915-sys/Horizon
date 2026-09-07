@@ -112,6 +112,26 @@ def merge_duplicate_group(group: list[CandidateRecord]) -> CandidateMergeResult:
         raise ValueError("cannot merge an empty candidate group")
     primary_source = max(group, key=_candidate_strength)
     metadata = dict(primary_source.item.metadata)
+    # Scrapers retain display names alongside IDs, including in premerged occurrences.
+    # Resolve those names before counting independent providers.
+    provider_aliases: dict[str, str] = {}
+    for candidate in group:
+        observed = candidate.item.metadata
+        identities = [(observed.get("provider_name"), observed.get("provider"))]
+        occurrences = observed.get("platform_occurrences")
+        if isinstance(occurrences, list):
+            identities.extend(
+                (row.get("provider"), row.get("provider_id"))
+                for row in occurrences if isinstance(row, dict)
+            )
+        for name, identity in identities:
+            if name and identity:
+                provider_aliases[str(name).strip().casefold()] = str(identity).strip().casefold()
+        identity = str(observed.get("provider") or "").strip().casefold()
+        for name, machine_id in (("alapi", "alapi_tophub"),
+                                 ("dailyhotapi", "dailyhotapi_public_instance")):
+            if identity == machine_id:
+                provider_aliases[name] = machine_id
     for plural, singular, fallback in (
         ("providers", "provider", "source_id"),
         ("platforms", "platform", "content_platform"),
@@ -131,6 +151,8 @@ def merge_duplicate_group(group: list[CandidateRecord]) -> CandidateMergeResult:
             ).strip().casefold()
             if value:
                 values.add(value)
+        if plural == "providers":
+            values = {provider_aliases.get(value, value) for value in values}
         metadata[plural] = sorted(values)
     evidence_by_key: dict[tuple[str, str], EvidenceReference] = {}
     for candidate in group:

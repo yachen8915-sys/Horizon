@@ -759,7 +759,8 @@ class WebhookNotifier:
                     value = " ".join(analysis.decision_summary.split()) if analysis else ""
                     if len(value) > 120:
                         value = value[:117].rstrip() + "..."
-                    lines.append(f"- [{candidate.item.title}]({candidate.item.url}) — {value}")
+                    evidence = summarizer.intelligence_evidence_label(candidate)
+                    lines.append(f"- [{candidate.item.title}]({candidate.item.url})｜{evidence} — {value}")
                 elements.append(_collapsible_panel(
                     f"{heading.removeprefix('## ')}（{len(candidates)}条）", "\n".join(lines)))
                 continue

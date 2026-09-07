@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .localization import normalize_language
 from ..models import CandidateRecord, ContentItem
+from ..processing.intelligence_brief import EVIDENCE_LABELS
 
 
 _CJK = r"[\u4e00-\u9fff\u3400-\u4dbf]"
@@ -738,7 +739,7 @@ class DailySummarizer:
         """Render candidate detail without assigning a source-based section."""
         item = candidate.item
         analysis = candidate.intelligence
-        parts = []
+        parts = [f"证据：{self.intelligence_evidence_label(candidate)}"]
         if analysis:
             parts.extend([
                 f"**为什么值得看：** {analysis.decision_summary}",
@@ -767,6 +768,13 @@ class DailySummarizer:
         if source_text:
             parts.append(f"来源：{source_text}")
         return "\n\n".join(parts)
+
+    @staticmethod
+    def intelligence_evidence_label(candidate: CandidateRecord) -> str:
+        label = EVIDENCE_LABELS[candidate.evidence_status.value]
+        if candidate.item.metadata.get("pending_verification"):
+            label += " / 待验证"
+        return label
 
     def generate_webhook_item(
         self,

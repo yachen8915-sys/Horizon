@@ -23,7 +23,12 @@ def build_intelligence_report(
 ) -> dict[str, Any]:
     fetch_report = fetch_report or {"status": "not_attempted", "sources": []}
     fetch_status = str(fetch_report.get("status") or "not_attempted")
-    if fetch_status == "failure":
+    analysis_failed = bool(candidates) and all(
+        candidate.status is CandidateStatus.PROCESSING_ERROR
+        or ReasonCode.ANALYSIS_FAILED in candidate.reason_codes
+        for candidate in candidates
+    )
+    if fetch_status == "failure" or analysis_failed:
         pipeline_status = "pipeline_failed"
     elif fetch_status == "partial_failure":
         pipeline_status = "collection_degraded"

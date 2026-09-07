@@ -158,7 +158,8 @@ class YouTubeDataScraper(BaseScraper):
                         )
                 except Exception as exc:
                     schema_error = isinstance(exc, ValueError)
-                    logger.warning("YouTube channel watchlist failed: %s", exc)
+                    error = self._safe_api_error(exc)
+                    logger.warning("YouTube channel watchlist failed: %s", error)
                     for channel in enabled_channels:
                         self._record_channel_health(
                             channel,
@@ -168,7 +169,7 @@ class YouTubeDataScraper(BaseScraper):
                                     checked_at=datetime.now(timezone.utc),
                                     transport_ok=schema_error,
                                     schema_ok=not schema_error,
-                                    error=f"{type(exc).__name__}: {exc}",
+                                    error=error,
                                 )
                             ),
                         )
@@ -202,20 +203,28 @@ class YouTubeDataScraper(BaseScraper):
                 )
             except Exception as exc:
                 schema_error = isinstance(exc, ValueError)
-                logger.warning("YouTube source %s failed: %s", query.query, exc)
+                error = self._safe_api_error(exc)
+                logger.warning("YouTube search failed: %s", error)
                 health = assess_source_health(
                     SourceHealthObservation(
                         source_id=self._source_id(query),
                         checked_at=datetime.now(timezone.utc),
                         transport_ok=schema_error,
                         schema_ok=False if schema_error else True,
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=error,
                     )
                 )
             self._record_health(query, health)
             for item in query_items:
                 items_by_id[item.id] = item
         return list(items_by_id.values())
+
+    @staticmethod
+    def _safe_api_error(exc: Exception) -> str:
+        # HTTPX exception strings include the complete authenticated URL.
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"HTTP {exc.response.status_code} {exc.request.url.path}"
+        return type(exc).__name__
 
     async def _fetch_via_ytdlp(
         self,
