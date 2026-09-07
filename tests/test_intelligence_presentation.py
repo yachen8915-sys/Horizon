@@ -160,3 +160,118 @@ def test_feishu_more_only_candidates_keep_the_correct_section(monkeypatch):
     elements = message["_request_body_override"]["card"]["body"]["elements"]
     assert [e["content"] for e in elements if e["tag"] == "markdown"][1:] == [
         "## 查看更多资讯", "## 查看更多热点"]
+
+
+def _ai_capacity_fixture(count):
+    lanes = [DecisionLane.PRODUCT_CAPABILITY, DecisionLane.TECHNICAL_FRONTIER,
+             DecisionLane.AI_INDUSTRY_SOCIETY]
+    ai = [_candidate(f"ai-{index:02}", lanes[index % 3]) for index in range(count)]
+    hot = _candidate("hot-independent", DecisionLane.HOT_CONTENT)
+    held = _candidate("held-ai", DecisionLane.PRODUCT_CAPABILITY)
+    held.status = CandidateStatus.HELD
+    held.reason_codes = [ReasonCode.HELD_BY_CAPACITY]
+    return ai, hot, held
+
+
+@pytest.mark.parametrize("count", [16, 17, 19])
+def test_shared_ai_detail_limit_is_collective_and_preserves_overflow_order(count):
+    from src.processing.intelligence_presentation import build_intelligence_presentation
+
+    ai, hot, held = _ai_capacity_fixture(count)
+    selected = [*ai[:8], hot, *ai[8:]]
+    presentation = build_intelligence_presentation(selected, [held])
+    detailed = presentation.ai_product + presentation.ai_technical + presentation.ai_industry
+    assert len(detailed) == 16
+    assert {c.candidate_id for c in detailed} == {c.candidate_id for c in ai[:16]}
+    for lane, candidates in [
+        (DecisionLane.PRODUCT_CAPABILITY, presentation.ai_product),
+        (DecisionLane.TECHNICAL_FRONTIER, presentation.ai_technical),
+        (DecisionLane.AI_INDUSTRY_SOCIETY, presentation.ai_industry),
+    ]:
+        assert candidates == [c for c in ai[:16] if c.intelligence.primary_lane is lane]
+    assert presentation.more_ai == [*ai[16:], held]
+    assert presentation.hot_leverage == [hot]
+    assert all(c.status is CandidateStatus.SELECTED for c in ai)
+
+
+@pytest.mark.parametrize("count", [16, 17, 19])
+def test_markdown_ai_detail_limit_keeps_every_overflow_url(count):
+    from src.models import RadarRunMode
+    from src.processing.intelligence_brief import render_intelligence_brief
+
+    ai, hot, held = _ai_capacity_fixture(count)
+    brief = render_intelligence_brief([*ai, hot], more_candidates=[held],
+        date="2026-09-07", run_mode=RadarRunMode.MORNING, total_fetched=50)
+    detail, more = brief.split("## 查看更多资讯", 1)
+    for candidate in ai[:16]:
+        assert f"### [{candidate.item.title}]({candidate.item.url})" in detail
+    for candidate in [*ai[16:], held]:
+        assert str(candidate.item.url) not in detail
+        assert str(candidate.item.url) in more
+    assert all(brief.count(str(c.item.url)) == 1 for c in [*ai, hot, held])
+
+
+@pytest.mark.parametrize("count", [16, 17, 19])
+def test_feishu_ai_detail_limit_keeps_every_overflow_url(count, monkeypatch):
+    from src.ai.summarizer import DailySummarizer
+    from src.models import WebhookConfig
+    from src.services.webhook import WebhookNotifier
+
+    monkeypatch.setenv("PRESENTATION_WEBHOOK_URL", "https://example.com/webhook")
+    ai, hot, held = _ai_capacity_fixture(count)
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, platform="feishu",
+        layout="collapsible", url_env="PRESENTATION_WEBHOOK_URL"))
+    message = notifier.build_daily_summary_messages(summary="unused",
+        important_items=[c.item for c in [*ai, hot]], intelligence_candidates=[*ai, hot],
+        intelligence_more_candidates=[held], all_items_count=50, date="2026-09-07",
+        lang="zh", summarizer=DailySummarizer())[0]
+    card = message["_request_body_override"]["card"]
+    panels = [e for e in card["body"]["elements"] if e["tag"] == "collapsible_panel"]
+    details = [p for p in panels if not p["header"]["title"]["content"].startswith("查看更多")]
+    more = [p for p in panels if p["header"]["title"]["content"].startswith("查看更多资讯")]
+    assert len(details) == 17  # 16 AI plus the independently selected hotspot.
+    assert len(more) == 1
+    assert card["schema"] == "2.0"
+    assert all(p["expanded"] is False for p in panels)
+    assert all(str(c.item.url) in str(details) for c in ai[:16])
+    for candidate in [*ai[16:], held]:
+        assert str(candidate.item.url) not in str(details)
+        assert str(candidate.item.url) in str(more)
+
+
+def test_ai_overflow_still_rejects_duplicate_membership():
+    from src.processing.intelligence_presentation import build_intelligence_presentation
+
+    ai, _, _ = _ai_capacity_fixture(17)
+    with pytest.raises(ValueError, match="Duplicate"):
+        build_intelligence_presentation(ai, [ai[16]])
+
+
+@pytest.mark.parametrize("more_only", [False, True])
+def test_markdown_summary_and_items_uses_complete_intelligence_summary(more_only, monkeypatch):
+    from src.ai.summarizer import DailySummarizer
+    from src.models import RadarRunMode, WebhookConfig
+    from src.processing.intelligence_brief import render_intelligence_brief
+    from src.services.webhook import WebhookNotifier
+
+    monkeypatch.setenv("PRESENTATION_WEBHOOK_URL", "https://example.com/webhook")
+    selected, more = presentation_fixture()
+    if more_only:
+        selected = []
+    for candidate in selected:
+        candidate.item.profile = "legacy-profile"
+        if candidate.intelligence.primary_lane is DecisionLane.HOT_CONTENT:
+            candidate.item.profile = "pangmen-platform-trend-radar"
+    brief = render_intelligence_brief(selected, more_candidates=more,
+        date="2026-09-07", run_mode=RadarRunMode.MORNING, total_fetched=50)
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, platform="feishu",
+        layout="markdown", delivery="summary_and_items", url_env="PRESENTATION_WEBHOOK_URL"))
+    messages = notifier.build_daily_summary_messages(summary=brief,
+        important_items=[c.item for c in selected], intelligence_candidates=selected,
+        intelligence_more_candidates=more, all_items_count=50, date="2026-09-07",
+        lang="zh", summarizer=DailySummarizer())
+    assert len(messages) == 1
+    assert messages[0]["message_kind"] == "summary"
+    assert messages[0]["summary"] == brief
+    assert "Legacy Profile" not in str(messages)
+    assert all(str(c.item.url) in messages[0]["summary"] for c in selected + more)

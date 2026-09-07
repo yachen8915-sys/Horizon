@@ -861,7 +861,14 @@ class WebhookNotifier:
             ]
 
         delivery = getattr(self.config, "delivery", "summary")
-        if delivery == "summary_and_items":
+        intelligence_mode = (
+            intelligence_candidates is not None
+            or intelligence_more_candidates is not None
+        )
+        # The legacy fan-out contract uses profile groups and cannot represent
+        # presentation overflow. Keep the complete pre-rendered intelligence
+        # brief as one summary, including every shared section and more URL.
+        if delivery == "summary_and_items" and not intelligence_mode:
             item_messages: List[dict[str, Any]] = []
             overview = summarizer.generate_webhook_overview(
                 important_items,
