@@ -264,6 +264,61 @@ def test_ai_lane_still_obeys_source_and_platform_limits():
     assert all(row.reason_codes[-1].value == "held_by_diversity" for row in result.held)
 
 
+@pytest.mark.parametrize("first_lane", ["trend", "ai"])
+@pytest.mark.parametrize("duplicate_field", ["editorial_topic_key", "event_key"])
+@pytest.mark.parametrize("max_items", [1, 20])
+def test_cross_lane_exact_duplicates_precede_capacity_and_major_event_override(
+    first_lane, duplicate_field, max_items,
+):
+    trend = _trend("trend", operations=10 if first_lane == "trend" else 8)
+    ai = _candidate("ai", lane=DecisionLane.PRODUCT_CAPABILITY,
+                    total=9.2, impact=10, evidence=EvidenceStatus.CONFIRMED)
+    setattr(ai, duplicate_field, getattr(trend, duplicate_field))
+    result = _selector(max_items=max_items, topic_limit=2).select([ai, trend], now=NOW)
+    assert [row.candidate_id for row in result.selected] == [first_lane]
+    assert [row.candidate_id for row in result.held] == ["ai" if first_lane == "trend" else "trend"]
+    assert result.held[0].reason_codes[-1].value == "duplicate"
+    assert result.soft_limit_overrides == []
+
+
+@pytest.mark.parametrize("duplicate_field", ["editorial_topic_key", "event_key"])
+@pytest.mark.parametrize("max_items", [15, 20])
+def test_platform_overflow_prevents_duplicate_major_ai_in_details_or_more(
+    duplicate_field, max_items,
+):
+    trends = [_trend(f"trend-{i:02}", operations=10) for i in range(16)]
+    ai = _candidate("major-ai", lane=DecisionLane.PRODUCT_CAPABILITY,
+                    total=9.2, impact=10, evidence=EvidenceStatus.CONFIRMED)
+    setattr(ai, duplicate_field, getattr(trends[-1], duplicate_field))
+    result = _selector(max_items=max_items).select([ai, *trends], now=NOW)
+    assert len(result.selected) == 15
+    assert [row.candidate_id for row in result.held] == ["trend-15", "major-ai"]
+    assert [row.reason_codes[-1].value for row in result.held] == ["held_by_capacity", "duplicate"]
+    assert result.soft_limit_overrides == []
+
+
+@pytest.mark.parametrize("duplicate_field", ["editorial_topic_key", "event_key"])
+def test_ai_capacity_overflow_also_prevents_a_later_duplicate_platform_trend(duplicate_field):
+    filler = _trend("filler", operations=10)
+    ai = _candidate("ai", lane=DecisionLane.PRODUCT_CAPABILITY,
+                    total=9.2, impact=10, evidence=EvidenceStatus.CONFIRMED)
+    trend = _trend("trend", operations=8)
+    setattr(trend, duplicate_field, getattr(ai, duplicate_field))
+    result = _selector(max_items=1).select([trend, ai, filler], now=NOW)
+    assert [row.candidate_id for row in result.selected] == ["filler"]
+    assert [row.candidate_id for row in result.held] == ["ai", "trend"]
+    assert [row.reason_codes[-1].value for row in result.held] == ["held_by_capacity", "duplicate"]
+
+
+def test_pure_ai_major_events_keep_the_existing_topic_diversity_override():
+    rows = [_candidate(f"ai-{i}", lane=DecisionLane.PRODUCT_CAPABILITY,
+                       total=9.2, impact=10, topic="same-topic") for i in range(2)]
+    result = _selector(topic_limit=1).select(rows, now=NOW)
+    assert len(result.selected) == 2
+    assert result.held == []
+    assert result.soft_limit_overrides == ["ai-1"]
+
+
 def test_product_decisions_are_prioritized_when_scores_are_close() -> None:
     hot = _candidate("hot", lane=DecisionLane.HOT_CONTENT, total=8.5)
     product = _candidate("product", lane=DecisionLane.PRODUCT_CAPABILITY, total=8.1)

@@ -94,12 +94,31 @@ class IntelligenceSelector:
         platform_counts: Counter[str] = Counter()
         topic_counts: Counter[str] = Counter()
         event_counts: Counter[str] = Counter()
+        platform_trend_topics: set[str] = set()
+        platform_trend_events: set[str] = set()
+        other_topics: set[str] = set()
+        other_events: set[str] = set()
         unverified_hot_count = 0
         platform_trend_selected_count = 0
 
         for candidate in eligible:
             is_platform_trend = self._is_platform_trend(candidate)
+            topic = candidate.editorial_topic_key or candidate.event_key or candidate.candidate_id
+            opposite_topics, opposite_events = (
+                (other_topics, other_events)
+                if is_platform_trend
+                else (platform_trend_topics, platform_trend_events)
+            )
+            if topic in opposite_topics or candidate.event_key in opposite_events:
+                result.held.append(
+                    self._held(candidate, ReasonCode.DUPLICATE, observed_at)
+                )
+                continue
             if not is_platform_trend and len(result.selected) >= self.config.max_items:
+                # The more tier must obey the same cross-lane identity boundary.
+                other_topics.add(topic)
+                if candidate.event_key:
+                    other_events.add(candidate.event_key)
                 result.held.append(
                     self._held(candidate, ReasonCode.HELD_BY_CAPACITY, observed_at)
                 )
@@ -138,7 +157,6 @@ class IntelligenceSelector:
                 candidate.item.metadata.get("content_platform")
                 or candidate.item.source_type.value
             ).lower()
-            topic = candidate.editorial_topic_key or candidate.event_key or candidate.candidate_id
             if is_platform_trend:
                 if (
                     topic_counts[topic] >= self.config.topic_limit
@@ -150,8 +168,10 @@ class IntelligenceSelector:
                     continue
                 # Capacity overflow is still a qualified, deduplicated candidate.
                 topic_counts[topic] += 1
+                platform_trend_topics.add(topic)
                 if candidate.event_key:
                     event_counts[candidate.event_key] += 1
+                    platform_trend_events.add(candidate.event_key)
                 if (
                     len(result.selected) >= self.config.max_items
                     or platform_trend_selected_count >= self.config.platform_trend_detail_limit
@@ -182,8 +202,10 @@ class IntelligenceSelector:
             source_counts[source] += 1
             platform_counts[platform] += 1
             topic_counts[topic] += 1
+            other_topics.add(topic)
             if candidate.event_key:
                 event_counts[candidate.event_key] += 1
+                other_events.add(candidate.event_key)
             if is_unverified_hot:
                 unverified_hot_count += 1
         return result
