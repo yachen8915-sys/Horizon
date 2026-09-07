@@ -88,6 +88,15 @@ class IntelligenceSelector:
             else:
                 eligible.append(candidate)
         eligible.sort(key=self._sort_key)
+        # Fill trend slots from leverage first; keep AI positions and pool-local ranking.
+        trend_order = iter(sorted(
+            (candidate for candidate in eligible if self._is_platform_trend(candidate)),
+            key=lambda candidate: candidate.item.metadata.get("trend_pool") == "watch",
+        ))
+        eligible = [
+            next(trend_order) if self._is_platform_trend(candidate) else candidate
+            for candidate in eligible
+        ]
 
         author_counts: Counter[str] = Counter()
         source_counts: Counter[str] = Counter()

@@ -135,7 +135,8 @@ def test_trend_titles_sharing_broad_words_are_not_fuzzy_merged():
     assert len(result.selected) == 2
 
 
-def test_platform_trend_sort_uses_only_operations_providers_rank_heat_content_and_id():
+@pytest.mark.parametrize("pool", ["leverage", "watch"])
+def test_platform_trend_sort_uses_only_operations_providers_rank_heat_content_and_id(pool):
     rows = [
         _trend("operations", operations=9, rank=99, content=1),
         _trend("providers", providers=["ALAPI", "DailyHotAPI"], rank=99),
@@ -149,10 +150,66 @@ def test_platform_trend_sort_uses_only_operations_providers_rank_heat_content_an
     rows[-1].intelligence.score.total = 10
     rows[-1].intelligence.score.freshness = 10
     rows[0].evidence_status = EvidenceStatus.UNVERIFIED
+    for row in rows:
+        row.item.metadata["trend_pool"] = pool
     result = _selector(max_items=20).select(list(reversed(rows)), now=NOW)
     assert [row.candidate_id for row in result.selected] == [
         "operations", "providers", "rank", "heat", "content", "a", "z",
     ]
+
+
+def test_lower_operations_leverage_keeps_detail_ahead_of_twenty_watch_trends():
+    leverage = _trend("leverage", operations=7, content=7)
+    leverage.item.metadata["trend_pool"] = "leverage"
+    watch = [_trend(f"watch-{i:02}", operations=9, content=6, rank=i + 1) for i in range(20)]
+    for row in watch:
+        row.item.metadata["trend_pool"] = "watch"
+
+    result = _selector().select([*reversed(watch), leverage], now=NOW)
+
+    assert [row.candidate_id for row in result.selected] == [
+        "leverage", *[f"watch-{i:02}" for i in range(14)],
+    ]
+    assert [row.candidate_id for row in result.held] == [f"watch-{i:02}" for i in range(14, 20)]
+    assert all(row.reason_codes[-1].value == "held_by_capacity" for row in result.held)
+
+
+def test_pool_priority_preserves_ai_positions_and_each_pool_order():
+    watch_high = _trend("watch-high", operations=10, content=6)
+    watch_low = _trend("watch-low", operations=8, content=6)
+    leverage_high = _trend("leverage-high", operations=7.5, content=8)
+    leverage_low = _trend("leverage-low", operations=7, content=7)
+    for row in [watch_high, watch_low]:
+        row.item.metadata["trend_pool"] = "watch"
+    for row in [leverage_high, leverage_low]:
+        row.item.metadata["trend_pool"] = "leverage"
+    ai = _candidate("ai", lane=DecisionLane.PRODUCT_CAPABILITY, total=8.5)
+
+    result = _selector().select([leverage_low, watch_low, ai, leverage_high, watch_high], now=NOW)
+
+    assert [row.candidate_id for row in result.selected] == [
+        "leverage-high", "ai", "leverage-low", "watch-high", "watch-low",
+    ]
+
+
+def test_pool_priority_does_not_bypass_leverage_cooldown_or_waste_capacity():
+    leverage = _trend("leverage", operations=7, content=7)
+    leverage.item.metadata["trend_pool"] = "leverage"
+    watch = [_trend(f"watch-{i:02}", operations=9, content=6) for i in range(16)]
+    for row in watch:
+        row.item.metadata["trend_pool"] = "watch"
+    delivered = DeliveryRecord(
+        delivery_id="delivered-leverage", run_id="morning", run_mode=RadarRunMode.MORNING,
+        delivered_at=NOW - timedelta(days=1), candidate_id=leverage.candidate_id,
+        event_key=leverage.event_key, event_version=1,
+        display_tier="selected", content_fingerprint="old",
+    )
+    result = _selector().select([*watch, leverage], deliveries=[delivered], now=NOW)
+    assert len(result.selected) == 15
+    assert all(row.item.metadata["trend_pool"] == "watch" for row in result.selected)
+    assert {row.candidate_id: row.reason_codes[-1].value for row in result.held} == {
+        "leverage": "duplicate", "watch-15": "held_by_capacity",
+    }
 
 
 def test_platform_trend_sort_handles_legacy_scores_and_invalid_native_signals():
