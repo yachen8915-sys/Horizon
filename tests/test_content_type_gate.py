@@ -185,6 +185,28 @@ def test_new_sentence_cannot_inherit_virtual_military_context(boundary):
     assert result.reason.value == "brand_safety"
 
 
+@pytest.mark.parametrize("title,excluded", [
+    ("游戏中角色被敌人围殴", False),
+    ("游戏中殴打一个NPC的连招教程", False),
+    ("玩家讲解游戏中角色被敌人围殴的反击教程", False),
+    ("游戏中角色被一群敌人围殴的反击教程", False),
+    ("游戏中殴打两个NPC的连招教程", False),
+    ("游戏中角色被敌人围殴后殴打一个NPC的教程", False),
+    ("动画演示导弹攻击航母后又击沉驱逐舰的特效制作", False),
+    ("游戏中角色被敌人围殴后男子殴打同伴", True),
+    ("游戏中殴打一个NPC后又殴打同伴", True),
+    ("游戏中殴打一个NPC扮演者", True),
+    ("动画演示导弹攻击航母后伊朗称打击美军驱逐舰", True),
+    ("动画演示导弹攻击航母后军方宣布轰炸军事基地", True),
+    ("动画演示导弹攻击航母后伊朗称打击美军驱逐舰的画面", True),
+])
+def test_local_attack_event_modifiers_and_reality_switch(title, excluded):
+    item, draft = make_gate_item(title=title, operations=9, content=6)
+    result = gate(item, draft)
+    assert result.accepted is not excluded
+    assert result.trend_pool == (None if excluded else "watch")
+
+
 @pytest.mark.parametrize("title", [
     "伊朗称打击了美军航母和驱逐舰",
     "中国博主伦敦直播遭外籍青年挑衅殴打",

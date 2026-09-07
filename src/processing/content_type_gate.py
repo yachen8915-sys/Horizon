@@ -24,24 +24,28 @@ BRAND_SAFETY_TERMS = {
 
 # Require a combat action near a military actor/target, not a country name or
 # an ordinary use of "打击" / "冲突" in operations content.
-_MILITARY_TARGET = r"(?:航母|驱逐舰|军舰|军事基地|军队|部队|战机|导弹)"
+_MILITARY_TARGET = re.compile(r"航母|驱逐舰|军舰|军事基地|军队|部队|战机|导弹")
 _COMBAT_ACTION = r"(?:空袭|轰炸|炮击|袭击|攻击|打击|击沉|交火|开火)"
 _REAL_VIOLENCE_SIGNAL = re.compile(
-    rf"{_COMBAT_ACTION}.{{0,12}}{_MILITARY_TARGET}"
-    rf"|{_MILITARY_TARGET}.{{0,12}}{_COMBAT_ACTION}"
+    rf"(?P<combat>{_COMBAT_ACTION})"
     r"|武装冲突"
     r"|(?P<assault>殴打|围殴|群殴|拳打脚踢|持刀伤人|持刀行凶|砍伤|捅伤|枪击)"
 )
 # Only explicit fictional/simulation framing qualifies; mentioning a game or
 # model alone must not exempt an assault on players or exhibition visitors.
 _SIMULATED_CONTEXT = re.compile(r"(?:游戏|电影|小说|动画)(?:中|内|里)|动画演示|模型演示")
-_REAL_WORLD_CONTEXT = re.compile(r"线下|现场|现实中|街头")
 _VIRTUAL_CONTINUATION = re.compile(r"教程|操作|特效|制作|演示|角色|npc|画面|模型", re.I)
 _NEW_REAL_EVENT = re.compile(r"约架|线下|现场|现实中|街头|宣布|通报|证实|称")
+_QUANTITY = r"(?:[一二两三四五六七八九十几多数\d]{1,3}|若干)(?:个|名|群)"
 _VIRTUAL_VICTIM_BEFORE = re.compile(
-    r"(?:角色|npc|虚拟人物)(?:遭到|受到|正在|突然|互相|被|遭)*$", re.I
+    r"(?:角色|npc|虚拟人物)(?:正在|突然|互相){0,2}"
+    rf"(?:(?:被|遭到|受到|遭)(?:(?:{_QUANTITY})?"
+    r"(?:敌人|对手|敌方角色|其他角色|npc)(?:所)?)?)?$", re.I
 )
-_VIRTUAL_VICTIM_AFTER = re.compile(r"^(?:了|着)?(?:游戏角色|角色|npc|虚拟人物)", re.I)
+_VIRTUAL_VICTIM_AFTER = re.compile(
+    rf"^(?:了|着)?(?:{_QUANTITY})?(?:游戏角色|角色|npc|虚拟人物)"
+    r"(?!扮演者|演员|配音)", re.I
+)
 
 
 @dataclass(frozen=True)
@@ -65,31 +69,50 @@ def is_brand_safety_excluded(item: ContentItem) -> bool:
             for clause in re.split(r"[,，;；:：…]+", sentence):
                 if not clause.strip():
                     continue
-                framing = _SIMULATED_CONTEXT.search(clause)
+                frames = list(_SIMULATED_CONTEXT.finditer(clause))
                 inherited = bool(
                     previous_virtual
                     and _VIRTUAL_CONTINUATION.search(clause)
                     and not _NEW_REAL_EVENT.search(clause)
                 )
-                for match in _REAL_VIOLENCE_SIGNAL.finditer(clause):
-                    virtual = inherited or bool(
-                        framing and framing.start() < match.end()
+                attacks = list(_REAL_VIOLENCE_SIGNAL.finditer(clause))
+                for index, match in enumerate(attacks):
+                    # Actor/object evidence is local to this action and cannot
+                    # cross another attack, even within the same clause.
+                    previous_end = attacks[index - 1].end() if index else 0
+                    next_start = (
+                        attacks[index + 1].start()
+                        if index + 1 < len(attacks) else len(clause)
                     )
+                    before = clause[max(previous_end, match.start() - 12):match.start()]
+                    after = clause[match.end():min(next_start, match.end() + 12)]
+                    if match.group("combat") and not (
+                        _MILITARY_TARGET.search(before) or _MILITARY_TARGET.search(after)
+                    ):
+                        continue
+                    framing = next(
+                        (frame for frame in reversed(frames) if frame.end() <= match.start()),
+                        None,
+                    )
+                    virtual = inherited or framing is not None
                     if match.group("assault"):
                         # A game-related dispute is a cause, not a virtual victim.
                         # Require this attack to act on a character/NPC directly.
                         virtual = virtual and bool(
-                            _VIRTUAL_VICTIM_BEFORE.search(clause[:match.start()])
-                            or _VIRTUAL_VICTIM_AFTER.search(clause[match.end():])
-                        ) and "约架" not in clause
+                            _VIRTUAL_VICTIM_BEFORE.search(before)
+                            or _VIRTUAL_VICTIM_AFTER.search(after)
+                        )
                     reality_start = framing.end() if framing else 0
-                    if not virtual or _REAL_WORLD_CONTEXT.search(
-                        clause[reality_start:match.end()]
+                    if not virtual or _NEW_REAL_EVENT.search(
+                        clause[reality_start:match.start()]
                     ):
                         return True
                 # Only an adjacent clause explicitly continuing virtual content
                 # may inherit; unrelated clauses end this scope.
-                previous_virtual = bool(framing) or inherited
+                scope_start = frames[-1].end() if frames else 0
+                previous_virtual = (bool(frames) or inherited) and not (
+                    _NEW_REAL_EVENT.search(clause[scope_start:])
+                )
     return False
 
 
