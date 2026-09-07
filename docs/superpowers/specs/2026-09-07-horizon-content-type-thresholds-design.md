@@ -211,3 +211,16 @@ git diff --check
 - DailyHotAPI 微博失败、ALAPI 微博健康、DailyHotAPI 抖音健康得到准确提示：“热点覆盖不完整：微博部分来源暂时不可用，抖音、百度、36氪来源数据暂不完整，今日头条及其他热点来源仍正常。”详细热点保留 DailyHotAPI 9 条、ALAPI 6 条。旧诊断仅有扁平 `source_health`，回放明确标注只转换覆盖信息，无法恢复整体 fetch 状态。
 - 当前展示类别无“AI 媒体”，Provider 仍为来源信号。归档中 18 条标题含 GPT-6 的候选，1 条被选中、17 条被门槛拒绝；本次没有 GPT-6 去重命中，不能将拒绝计作“合并成功”。脚本复用现有精确 event/topic 选择规则并保留已有上游合并状态，没有新增标题/模糊去重；来源合并与身份规则依赖已通过的聚焦单测，本回放不重跑上游来源身份合并。
 - 详细热点确为 15 条，6 条过筛溢出保留在 `more_hot`，但上述安全缺口尚未解决。共享展示、Markdown 和飞书结构的单测通过；**真实飞书视觉与送达未验证**，本轮未联网、调用 AI、发送 webhook、触发 Actions 或发起新影子运行。
+
+### 12.1 最终离线复验（2026-09-07，生产基线 `11754ab`）
+
+本节是对 12 节初次回放状态的追加更新；前文初次失败记录保留为历史证据，当前结果以本节为准。已包含可借势优先排序与后续安全边界修复。
+
+- 修复回放诊断结构校验：提供的 `fetch_report` 必须是对象，`sources` 及实际消费的 `providers/source_health/health/feeds/watchers` 必须为对象列表；损坏容器或非对象成员返回 CLI exit 2，且不创建成功报告。未提供的 optional 字段仍兼容。main 级负例先观察到 17 项失败（原实现错误地返回 0），修复后回放测试共 33 项通过；未触碰生产采集、AI、发送或 ledger。
+- 在 `11754ab` 上重新执行两次真实命令：`uv run --offline --extra dev python scripts/replay_intelligence_selection.py --input 'C:/Users/cheni/AppData/Local/Temp/horizon-canary-34067056865-b430a6c5ff83439e993dccb95748ade5' --output 'C:/Users/cheni/AppData/Local/Temp/horizon-content-type-replay.json'`，第二次仅将输出改为 `C:/Users/cheni/AppData/Local/Temp/horizon-content-type-replay-final-check.json`。两次 exit 0；输入全部 6 文件 SHA256 前后不变；两份报告 SHA256 相同：`3AB7DB5E97C7459B0505A3D752A4D2C2C89177DA8D6D7369685FC30C0CAA5A34`。
+- 当前真实结果：253 条 compatible、0 incompatible；19 selected、4 held（均容量溢出）、225 rejected、5 observing。15 条热点详情为 1 条 `hot_leverage` + 14 条 `hot_watch`，4 条 `more_hot`；另有 3 条 AI 产品和 1 条平台变化详情。
+- **本次通过**：“用AI拼豆的方式打开旅行”已在 `hot_leverage` 详情；“伊朗称打击了美军航母和驱逐舰”“中国博主伦敦直播遭外籍青年挑衅殴打”均为 `rejected/brand_safety`，不在详情或更多。前次对应两项问题在这些真实案例上已修复，不据此宣称所有题材都已验收。
+- “军训才艺大赏”仍是 watch 池、`held_by_capacity → more_hot`；“教育部回应中小学是否须买校服”仍在 `hot_watch` 详情。两者继续使用原归档分数与信号。“女儿用豆包抄答案家长只用了一招”仍为旧 `hot_content`，被 `insufficient_hotspot_signal` 拒绝，新“AI 行业与社会”分类仍 **待新影子运行验证**。
+- 展示分类不含“AI 媒体”；覆盖提示仍为：“热点覆盖不完整：微博部分来源暂时不可用，抖音、百度、36氪来源数据暂不完整，今日头条及其他热点来源仍正常。”旧扁平来源健康信息仅用于覆盖提示，不恢复未归档的整体 fetch 状态或历史 delivery cooldown。
+- 在 `11754ab` 重跑上节同一组 20 文件聚焦命令：`614 passed in 15.01s`；`uv run --offline --extra dev python -m pytest tests/test_replay_intelligence_selection.py tests/test_cli.py tests/test_main.py -o addopts='' -q`：`48 passed in 5.18s`（33 replay + 15 CLI/main）；compileall exit 0。`uv run --offline --extra dev python -m pytest -o addopts='' -q`：`1137 passed, 4 failed in 30.32s`，仍仅为上节列明的 Bluesky/X/YouTube 四项固定日期健康状态断言，没有新增失败，未修改 freshness 或夹具。
+- 仍未运行新 AI 分析、真实飞书视觉或送达验收；未联网、触发 Actions、发送 webhook 或写 configured ledger。本次提交仅限回放诊断结构修复、新入口测试与此事实附录。

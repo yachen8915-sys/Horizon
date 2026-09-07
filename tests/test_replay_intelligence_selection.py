@@ -151,3 +151,40 @@ def test_cli_refuses_output_inside_archive(tmp_path):
     assert result.returncode != 0
     assert "Replay failed:" in result.stderr
     assert output.read_bytes() == before
+
+
+@pytest.mark.parametrize("diagnostic", [
+    {"fetch_report": None},
+    {"fetch_report": {"sources": ["broken-source"]}},
+    *[
+        {"fetch_report": {"sources": [{"source": "Platform Trends", key: value}]}}
+        for key in ("providers", "source_health", "health", "feeds", "watchers")
+        for value in ({}, ["broken-row"], None)
+    ],
+    {"source_health": {}},
+    {"source_health": ["broken-row"]},
+])
+def test_main_rejects_malformed_diagnostic_containers_without_output(tmp_path, capsys, diagnostic):
+    from scripts.replay_intelligence_selection import main
+
+    root = archive(tmp_path, [_trend("hot")], diagnostic=diagnostic)
+    output = tmp_path / "report.json"
+    assert main(["--input", str(root), "--output", str(output)]) == 2
+    assert "Replay failed: Malformed diagnostic" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("diagnostic", [
+    {"fetch_report": {}},
+    {"fetch_report": {"sources": [{}]}},
+    {"fetch_report": {"sources": [{"source": "Platform Trends", "providers": [], "health": [{}]}]}},
+    {"source_health": [{}]},
+    {"run_id": "legacy-no-health"},
+])
+def test_main_accepts_missing_optional_diagnostic_fields(tmp_path, diagnostic):
+    from scripts.replay_intelligence_selection import main
+
+    root = archive(tmp_path, [_trend("hot")], diagnostic=diagnostic)
+    output = tmp_path / "report.json"
+    assert main(["--input", str(root), "--output", str(output)]) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["selected_titles"] == ["hot"]

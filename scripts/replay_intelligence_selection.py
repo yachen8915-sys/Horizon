@@ -29,6 +29,12 @@ from src.processing.intelligence_selection import IntelligenceSelector
 from src.storage.manager import StorageManager
 
 
+def _diagnostic_rows(value: Any, path: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+        raise ValueError(f"Malformed diagnostic {path}: expected a list of objects")
+    return value
+
+
 def replay_archive(archive_root: Path, *, config: IntelligenceRadarConfig) -> dict[str, Any]:
     """Deterministic read-only replay; all output writes belong to main().
 
@@ -67,13 +73,16 @@ def replay_archive(archive_root: Path, *, config: IntelligenceRadarConfig) -> di
         if not isinstance(diagnostic, dict):
             raise ValueError("Diagnostic snapshot must be a JSON object")
         fetch_report = diagnostic.get("fetch_report")
-        if fetch_report is not None:
-            if not isinstance(fetch_report, dict) or not isinstance(fetch_report.get("sources", []), list):
+        if "fetch_report" in diagnostic:
+            if not isinstance(fetch_report, dict):
                 raise ValueError("Malformed diagnostic fetch_report")
+            sources = _diagnostic_rows(fetch_report.get("sources", []), "fetch_report.sources")
+            for index, source_health in enumerate(sources):
+                for key in ("providers", "source_health", "health", "feeds", "watchers"):
+                    if key in source_health:
+                        _diagnostic_rows(source_health[key], f"fetch_report.sources[{index}].{key}")
         elif "source_health" in diagnostic:
-            health = diagnostic["source_health"]
-            if not isinstance(health, list) or any(not isinstance(row, dict) for row in health):
-                raise ValueError("Malformed diagnostic source_health")
+            health = _diagnostic_rows(diagnostic["source_health"], "source_health")
             trend_health = [row for row in health if str(row.get("source_id", "")).startswith("platform-trends:")]
             fetch_report = {"status": "not_attempted", "sources": [{
                 "source": "Platform Trends", "source_health": trend_health,
