@@ -15,8 +15,11 @@ from src.models import (
     Config,
     ContentAnalysis,
     ContentItem,
+    DecisionLane,
     DigestConfig,
     EditorialSelectionConfig,
+    EvidenceStatus,
+    IntelligenceAnalysis,
     ProcessingConfig,
     ProcessingResult,
     ProfileSettingsConfig,
@@ -482,6 +485,30 @@ def test_legacy_pool_helper_rejects_seven_without_hotspot_boost():
         operations=7, content=6,
     )
     assert HorizonOrchestrator._assign_platform_trend_pool(item) is None
+    assert "trend_pool" not in item.metadata
+
+
+@pytest.mark.parametrize("configured", [True, False])
+@pytest.mark.parametrize("lane", [DecisionLane.HOT_CONTENT, DecisionLane.AI_INDUSTRY_SOCIETY])
+def test_balanced_digest_omits_unqualified_hot_trend_without_watch_fallback(configured, lane):
+    digest = DigestConfig(
+        profile_limits={"pangmen-platform-trend-radar": 2},
+        platform_trend_watch_limit=1,
+    ) if configured else DigestConfig()
+    item = _set_trend_scores(
+        make_item("no-boost", 7, "platform-trend", "pangmen-platform-trend-radar"),
+        operations=7, content=6,
+    )
+    item.processing.analysis.intelligence = IntelligenceAnalysis(
+        primary_lane=lane, decision_summary="值得关注", content_summary="事件信息",
+        evidence_status=EvidenceStatus.UNVERIFIED,
+    )
+    # A stale label must not turn a rejected pool result back into admission.
+    item.metadata["trend_pool"] = "watch"
+
+    result = make_orchestrator(digest).apply_balanced_digest([item])
+
+    assert result.items == ([] if lane is DecisionLane.HOT_CONTENT else [item])
     assert "trend_pool" not in item.metadata
 
 

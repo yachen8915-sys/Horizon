@@ -21,6 +21,7 @@ from .models import (
     CandidateStatusTransition,
     Config,
     ContentItem,
+    DecisionLane,
     ReasonCode,
     SourceType,
 )
@@ -2364,11 +2365,24 @@ class HorizonOrchestrator:
         profile_limits = digest.profile_limits
         unbounded_profiles = set(digest.unbounded_profiles)
 
+        rejected_trends: set[int] = set()
+        for item in items:
+            pool = self._assign_platform_trend_pool(item)
+            analysis = item.processing.analysis if item.processing else None
+            if (
+                pool is None
+                and item.processing
+                and item.processing.classification.profile == _PLATFORM_TREND_PROFILE_ID
+                and analysis
+                and analysis.intelligence
+                and analysis.intelligence.primary_lane is DecisionLane.HOT_CONTENT
+            ):
+                rejected_trends.add(id(item))
+        if rejected_trends:
+            items = [item for item in items if id(item) not in rejected_trends]
+
         if not groups and max_items is None and not profile_limits:
             return BalancedDigestResult(items=items)
-
-        for item in items:
-            self._assign_platform_trend_pool(item)
 
         def digest_sort_key(
             item: ContentItem,
