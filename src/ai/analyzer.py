@@ -413,6 +413,7 @@ class ContentAnalyzer:
             "product_update",
             "technical_update",
             "hot_content",
+            "industry_social",
             "platform_change",
             "financing",
             "personnel",

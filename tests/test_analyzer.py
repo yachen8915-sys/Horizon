@@ -295,6 +295,34 @@ def test_platform_trend_repairs_unknown_operations_focus_once() -> None:
     assert item.processing.analysis.operations_focus == "general"
 
 
+def test_intelligence_validation_preserves_industry_social_content_kind() -> None:
+    response = json.dumps(
+        {
+            "score": 8,
+            "reason": "Relevant",
+            "summary": "AI use in education is the core event.",
+            "tags": ["ai", "education"],
+            "intelligence": {
+                "primary_lane": "ai_industry_society",
+                "content_kind": "industry_social",
+                "decision_summary": "Track AI's impact on education.",
+                "content_summary": "A student used AI to copy answers.",
+                "evidence_status": "reported",
+                "score": {},
+            },
+        }
+    )
+
+    result, failure = ContentAnalyzer._validate_analysis_response(
+        response, require_intelligence=True
+    )
+
+    assert failure == ""
+    assert result is not None
+    assert result.intelligence is not None
+    assert result.intelligence.content_kind == "industry_social"
+
+
 def test_intelligence_validation_normalizes_untrusted_derived_and_optional_fields() -> None:
     response = json.dumps(
         {
