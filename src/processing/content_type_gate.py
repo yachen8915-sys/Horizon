@@ -36,7 +36,12 @@ _REAL_VIOLENCE_SIGNAL = re.compile(
 # model alone must not exempt an assault on players or exhibition visitors.
 _SIMULATED_CONTEXT = re.compile(r"(?:游戏|电影|小说|动画)(?:中|内|里)|动画演示|模型演示")
 _REAL_WORLD_CONTEXT = re.compile(r"线下|现场|现实中|街头")
-_REAL_PERSON = re.compile(r"男子|女子|青年|玩家|博主|游客|观众")
+_VIRTUAL_CONTINUATION = re.compile(r"教程|操作|特效|制作|演示|角色|npc|画面|模型", re.I)
+_NEW_REAL_EVENT = re.compile(r"约架|线下|现场|现实中|街头|宣布|通报|证实|称")
+_VIRTUAL_VICTIM_BEFORE = re.compile(
+    r"(?:角色|npc|虚拟人物)(?:遭到|受到|正在|突然|互相|被|遭)*$", re.I
+)
+_VIRTUAL_VICTIM_AFTER = re.compile(r"^(?:了|着)?(?:游戏角色|角色|npc|虚拟人物)", re.I)
 
 
 @dataclass(frozen=True)
@@ -54,25 +59,37 @@ def is_brand_safety_excluded(item: ContentItem) -> bool:
     if any(term in normalized for term in BRAND_SAFETY_TERMS):
         return True
     for signal in signals:
-        text = str(signal)
-        for clause in re.finditer(r"[^,，。;；!?！？\n]+", text):
-            for match in _REAL_VIOLENCE_SIGNAL.finditer(clause.group()):
-                # Framing can precede a comma, but never comes from other tags.
-                context = text[:clause.start() + match.end()]
-                simulated = _SIMULATED_CONTEXT.search(context)
-                if not simulated:
-                    return True
-                # A person introduced before "游戏中" is a real-world subject,
-                # e.g. a man assaulting someone because of an in-game dispute.
-                real_assault = match.group("assault") and (
-                    _REAL_PERSON.search(context[:simulated.start()])
-                    or "约架" in context
-                )
-                if not real_assault and not _REAL_WORLD_CONTEXT.search(
-                    context[simulated.end():]
-                ):
+        # A new sentence or independent tag cannot inherit fictional framing.
+        for sentence in re.split(r"[。.!?！？\n]+", str(signal)):
+            previous_virtual = False
+            for clause in re.split(r"[,，;；:：…]+", sentence):
+                if not clause.strip():
                     continue
-                return True
+                framing = _SIMULATED_CONTEXT.search(clause)
+                inherited = bool(
+                    previous_virtual
+                    and _VIRTUAL_CONTINUATION.search(clause)
+                    and not _NEW_REAL_EVENT.search(clause)
+                )
+                for match in _REAL_VIOLENCE_SIGNAL.finditer(clause):
+                    virtual = inherited or bool(
+                        framing and framing.start() < match.end()
+                    )
+                    if match.group("assault"):
+                        # A game-related dispute is a cause, not a virtual victim.
+                        # Require this attack to act on a character/NPC directly.
+                        virtual = virtual and bool(
+                            _VIRTUAL_VICTIM_BEFORE.search(clause[:match.start()])
+                            or _VIRTUAL_VICTIM_AFTER.search(clause[match.end():])
+                        ) and "约架" not in clause
+                    reality_start = framing.end() if framing else 0
+                    if not virtual or _REAL_WORLD_CONTEXT.search(
+                        clause[reality_start:match.end()]
+                    ):
+                        return True
+                # Only an adjacent clause explicitly continuing virtual content
+                # may inherit; unrelated clauses end this scope.
+                previous_virtual = bool(framing) or inherited
     return False
 
 

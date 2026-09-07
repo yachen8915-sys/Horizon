@@ -154,6 +154,37 @@ def test_simulated_context_preserves_punctuation_but_not_real_assaults(
     assert result.trend_pool == (None if excluded else "watch")
 
 
+@pytest.mark.parametrize("title,excluded", [
+    ("因游戏中发生争执，男子殴打同伴", True),
+    ("游戏中发生争执后，玩家约架并互相殴打", True),
+    ("男子殴打同伴，起因是游戏中发生争执", True),
+    ("玩家因游戏中角色遭围殴，殴打同伴", True),
+    ("动画演示，观众殴打同伴", True),
+    ("玩家学习游戏中角色遭围殴的反击教程", False),
+    ("玩家学习，游戏中角色遭围殴的反击教程", False),
+    ("游戏中角色遭围殴的反击教程供玩家学习", False),
+    ("玩家学习游戏中殴打NPC的连招", False),
+    ("动画演示导弹攻击航母，伊朗称打击了美军航母和驱逐舰", True),
+    ("动画演示导弹攻击航母，军舰遭导弹袭击", True),
+])
+def test_violence_scope_follows_current_action_and_target(title, excluded):
+    item, draft = make_gate_item(title=title, operations=9, content=6)
+    result = gate(item, draft)
+    assert result.accepted is not excluded
+    assert result.trend_pool == (None if excluded else "watch")
+
+
+@pytest.mark.parametrize("boundary", ["。", ".", "？", "?", "！", "!", "\n"])
+def test_new_sentence_cannot_inherit_virtual_military_context(boundary):
+    item, draft = make_gate_item(
+        title="动画演示导弹攻击航母" + boundary + "伊朗称打击了美军航母和驱逐舰",
+        operations=9, content=6,
+    )
+    result = gate(item, draft)
+    assert not result.accepted
+    assert result.reason.value == "brand_safety"
+
+
 @pytest.mark.parametrize("title", [
     "伊朗称打击了美军航母和驱逐舰",
     "中国博主伦敦直播遭外籍青年挑衅殴打",
