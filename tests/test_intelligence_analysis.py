@@ -45,6 +45,38 @@ def test_analysis_has_exactly_one_primary_decision_lane() -> None:
     assert analysis.direct_impacts == ["users can complete a new workflow"]
 
 
+def test_intelligence_draft_accepts_industry_social_content() -> None:
+    draft = _draft(
+        primary_lane=DecisionLane.AI_INDUSTRY_SOCIETY,
+        content_kind="industry_social",
+    )
+
+    assert draft.content_kind == "industry_social"
+
+
+def test_ai_industry_society_uses_agreed_initial_weights() -> None:
+    dimensions = CandidateScore(
+        decision_impact=10,
+        audience_fit=0,
+        novelty=0,
+        evidence_quality=0,
+        demonstrability=0,
+        propagation_quality=0,
+        freshness=0,
+        differentiation=0,
+    )
+
+    analysis = build_intelligence_analysis(
+        _draft(
+            primary_lane=DecisionLane.AI_INDUSTRY_SOCIETY,
+            content_kind="industry_social",
+            dimensions=dimensions,
+        )
+    )
+
+    assert analysis.score.total == 2.0
+
+
 def test_financing_without_direct_product_or_user_impact_is_rejected() -> None:
     draft = _draft(content_kind="financing", direct_impacts=[])
 

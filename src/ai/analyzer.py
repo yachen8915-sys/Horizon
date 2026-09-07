@@ -419,6 +419,10 @@ class ContentAnalyzer:
             "other",
         }
 
+        operations_focus = parsed.get("operations_focus")
+        if isinstance(operations_focus, str):
+            parsed["operations_focus"] = operations_focus.strip()
+
         content_format = parsed.get("content_format")
         if content_format is not None and content_format not in content_formats:
             parsed["content_format"] = "opinion_news"

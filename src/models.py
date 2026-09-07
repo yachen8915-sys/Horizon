@@ -77,6 +77,7 @@ class DecisionLane(str, Enum):
     PRODUCT_CAPABILITY = "product_capability"
     HOT_CONTENT = "hot_content"
     TECHNICAL_FRONTIER = "technical_frontier"
+    AI_INDUSTRY_SOCIETY = "ai_industry_society"
     PLATFORM_AI_CHANGE = "platform_ai_change"
 
 
@@ -196,6 +197,12 @@ class ContentAnalysis(BaseModel):
     content_opportunity_score: Optional[float] = Field(
         default=None, ge=0, le=10, allow_inf_nan=False
     )
+    operations_focus: Literal[
+        "ai_tech",
+        "workplace_youth",
+        "visual_content",
+        "general",
+    ] | None = None
     operations_reason: Optional[str] = None
     is_platform_change: Optional[bool] = None
     platform: Optional[Literal["douyin", "xiaohongshu", "bilibili", "wechat"]] = None

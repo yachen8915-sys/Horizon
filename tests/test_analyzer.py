@@ -223,7 +223,7 @@ def test_analysis_prompt_combines_common_rules_and_profile_policy():
 
 def test_intelligence_mode_adds_decision_and_evidence_contract() -> None:
     prompt = analysis_system_prompt(
-        PROFILES.get("pangmen-topic-radar"), include_intelligence=True
+        PROFILES.get("pangmen-platform-trend-radar"), include_intelligence=True
     )
 
     assert '"intelligence"' in prompt
@@ -231,7 +231,68 @@ def test_intelligence_mode_adds_decision_and_evidence_contract() -> None:
     assert '"decision_summary"' in prompt
     assert '"evidence_status"' in prompt
     assert '"propagation_quality"' in prompt
+    assert "ai_industry_society" in prompt
+    assert "industry_social" in prompt
+    assert '"operations_focus"' in prompt
+    assert "按核心事实选择唯一主分类" in prompt
+    assert "来源不能决定主分类" in prompt
+    assert "用 AI 拼豆的方式打开旅行" in prompt
+    assert "女儿用豆包抄答案" in prompt
+    assert "DailyHotAPI" in prompt
+    assert "ALAPI" in prompt
+    assert "AI HOT" in prompt
+    assert "RSS" in prompt
+    assert "聚合线索" in prompt
+    assert "待核验" in prompt
     assert '"total"' not in prompt
+
+
+def test_platform_trend_repairs_unknown_operations_focus_once() -> None:
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "score": 8,
+                    "operations_score": 8,
+                    "content_opportunity_score": 5,
+                    "operations_focus": "sports",
+                    "reason": "Relevant",
+                    "summary": "A useful trend.",
+                    "tags": ["trend"],
+                }
+            ),
+            json.dumps(
+                {
+                    "score": 8,
+                    "operations_score": 8,
+                    "content_opportunity_score": 5,
+                    "operations_focus": "general",
+                    "reason": "Relevant",
+                    "summary": "A corrected trend.",
+                    "tags": ["trend"],
+                }
+            ),
+        ]
+    )
+    requests = []
+
+    async def complete(**kwargs):
+        requests.append(kwargs)
+        return next(responses)
+
+    item = _make_item("platform:focus-repair")
+    item.profile = "pangmen-platform-trend-radar"
+
+    asyncio.run(
+        ContentAnalyzer(SimpleNamespace(complete=complete), PROFILES)._analyze_item(item)
+    )
+
+    assert len(requests) == 2
+    assert requests[1]["temperature"] == 0
+    assert "invalid field operations_focus" in requests[1]["user"]
+    assert item.processing is not None
+    assert item.processing.analysis is not None
+    assert item.processing.analysis.operations_focus == "general"
 
 
 def test_intelligence_validation_normalizes_untrusted_derived_and_optional_fields() -> None:

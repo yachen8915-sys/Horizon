@@ -23,6 +23,7 @@ def analysis_system_prompt(
   "score": <same value as operations_score, from 0 to 10>,
   "operations_score": <number from 0 to 10>,
   "content_opportunity_score": <number from 0 to 10>,
+  "operations_focus": "ai_tech|workplace_youth|visual_content|general",
   "operations_reason": "<one sentence explaining why operations should care>",
   "reason": "<concise explanation of both scores>",
   "summary": "<one or two sentence factual hotspot brief>",
@@ -88,10 +89,19 @@ engagement proves a factual assertion.
   "tags": ["<tag>", "..."]
 }"""
     if include_intelligence:
+        editorial_guidance += """
+For intelligence routing, 按核心事实选择唯一主分类，来源不能决定主分类。
+- “用 AI 拼豆的方式打开旅行” -> `hot_content`, because the core value is a popular format.
+- “女儿用豆包抄答案” -> `ai_industry_society`, because AI use in education is the core event.
+- An item mentioning AI only as a hook must not enter the AI lane.
+- DailyHotAPI, ALAPI, AI HOT, RSS and other providers are source metadata, never a lane.
+- For unverified aggregator items classified as `ai_industry_society`, use wording
+  equivalent to “聚合线索 / 待核验” and do not use confirmed language.
+"""
         intelligence_contract = """,
   "intelligence": {
-    "primary_lane": "product_capability|hot_content|technical_frontier|platform_ai_change",
-    "content_kind": "product_update|technical_update|hot_content|platform_change|financing|personnel|other",
+    "primary_lane": "product_capability|hot_content|technical_frontier|ai_industry_society|platform_ai_change",
+    "content_kind": "product_update|technical_update|hot_content|industry_social|platform_change|financing|personnel|other",
     "novelty_basis": "new_event|new_release|new_data|new_angle|ongoing_update|none",
     "direct_impacts": ["<specific product, technical, user, or platform impact>", "..."],
     "decision_summary": "<why this changes a decision for the Pangmen account>",

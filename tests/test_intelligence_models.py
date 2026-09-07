@@ -25,6 +25,23 @@ from src.models import (
 NOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
 
 
+def test_decision_lane_includes_ai_industry_society() -> None:
+    assert DecisionLane.AI_INDUSTRY_SOCIETY.value == "ai_industry_society"
+
+
+def test_content_analysis_accepts_operations_focus() -> None:
+    analysis = ContentAnalysis(
+        score=8,
+        operations_score=8,
+        content_opportunity_score=5,
+        operations_focus="workplace_youth",
+        reason="useful",
+        summary="summary",
+    )
+
+    assert analysis.operations_focus == "workplace_youth"
+
+
 def _minimal_config() -> dict:
     return {
         "ai": {"provider": "openai", "model": "test", "api_key_env": "KEY"},
