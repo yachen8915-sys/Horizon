@@ -30,12 +30,13 @@ _REAL_VIOLENCE_SIGNAL = re.compile(
     rf"{_COMBAT_ACTION}.{{0,12}}{_MILITARY_TARGET}"
     rf"|{_MILITARY_TARGET}.{{0,12}}{_COMBAT_ACTION}"
     r"|武装冲突"
-    r"|殴打|围殴|群殴|拳打脚踢|持刀伤人|持刀行凶|砍伤|捅伤|枪击"
+    r"|(?P<assault>殴打|围殴|群殴|拳打脚踢|持刀伤人|持刀行凶|砍伤|捅伤|枪击)"
 )
 # Only explicit fictional/simulation framing qualifies; mentioning a game or
 # model alone must not exempt an assault on players or exhibition visitors.
 _SIMULATED_CONTEXT = re.compile(r"(?:游戏|电影|小说|动画)(?:中|内|里)|动画演示|模型演示")
 _REAL_WORLD_CONTEXT = re.compile(r"线下|现场|现实中|街头")
+_REAL_PERSON = re.compile(r"男子|女子|青年|玩家|博主|游客|观众")
 
 
 @dataclass(frozen=True)
@@ -53,11 +54,21 @@ def is_brand_safety_excluded(item: ContentItem) -> bool:
     if any(term in normalized for term in BRAND_SAFETY_TERMS):
         return True
     for signal in signals:
-        for clause in re.split(r"[,，。;；!?！？\n]", str(signal)):
-            for match in _REAL_VIOLENCE_SIGNAL.finditer(clause):
-                context = clause[:match.end()]
+        text = str(signal)
+        for clause in re.finditer(r"[^,，。;；!?！？\n]+", text):
+            for match in _REAL_VIOLENCE_SIGNAL.finditer(clause.group()):
+                # Framing can precede a comma, but never comes from other tags.
+                context = text[:clause.start() + match.end()]
                 simulated = _SIMULATED_CONTEXT.search(context)
-                if simulated and not _REAL_WORLD_CONTEXT.search(
+                if not simulated:
+                    return True
+                # A person introduced before "游戏中" is a real-world subject,
+                # e.g. a man assaulting someone because of an in-game dispute.
+                real_assault = match.group("assault") and (
+                    _REAL_PERSON.search(context[:simulated.start()])
+                    or "约架" in context
+                )
+                if not real_assault and not _REAL_WORLD_CONTEXT.search(
                     context[simulated.end():]
                 ):
                     continue

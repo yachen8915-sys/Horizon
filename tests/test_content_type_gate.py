@@ -132,6 +132,28 @@ def test_safe_neighbors_do_not_trigger_real_world_violence_rules(title):
     assert result.trend_pool == "watch"
 
 
+@pytest.mark.parametrize("separator", ["", "，", ",", "：", "；", "……"])
+@pytest.mark.parametrize("prefix,suffix,excluded", [
+    ("男子因游戏中发生争执", "殴打同伴", True),
+    ("两名玩家因游戏中发生争执", "约架后互相殴打", True),
+    ("军舰游戏中", "导弹击沉驱逐舰的操作教程", False),
+    ("动画演示", "导弹攻击航母的特效制作", False),
+    ("动画演示导弹攻击航母", "现场观众遭殴打", True),
+])
+def test_simulated_context_preserves_punctuation_but_not_real_assaults(
+    separator, prefix, suffix, excluded,
+):
+    item, draft = make_gate_item(
+        title=prefix + separator + suffix, operations=9, content=6,
+    )
+    result = gate(item, draft)
+    assert result.accepted is not excluded
+    assert result.reason.value == (
+        "brand_safety" if excluded else "passed_hard_gates"
+    )
+    assert result.trend_pool == (None if excluded else "watch")
+
+
 @pytest.mark.parametrize("title", [
     "伊朗称打击了美军航母和驱逐舰",
     "中国博主伦敦直播遭外籍青年挑衅殴打",
