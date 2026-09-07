@@ -130,6 +130,20 @@ def test_one_healthy_provider_keeps_source_fetch_success() -> None:
     assert len(outcome.provider_health) == 2
 
 
+def test_mixed_provider_fetch_preserves_successful_items_and_shared_notice():
+    from tests.test_coverage_notice import health, notice_for, PARTIAL_NOTICE
+
+    orchestrator = make_orchestrator()
+    items = [make_item("douyin-dailyhot"), make_item("zhihu-alapi")]
+    scraper = StubScraper(items)
+    scraper.last_provider_results = [health("weibo", "dailyhot", "failed"),
+        health("douyin", "dailyhot", "healthy"), health("zhihu", "alapi_tophub", "healthy")]
+    outcome = asyncio.run(orchestrator._fetch_with_progress("Platform Trends", scraper, SINCE))
+    assert outcome.items == items
+    assert outcome.status == "success"
+    assert notice_for(FetchReport([outcome]).to_dict()) == PARTIAL_NOTICE
+
+
 def test_all_rss_feed_failures_make_aggregate_source_fail() -> None:
     orchestrator = make_orchestrator()
     scraper = StubScraper([])
@@ -394,3 +408,63 @@ def test_native_run_treats_all_success_empty_as_no_content(monkeypatch) -> None:
     asyncio.run(orchestrator.run())
 
     send_failure.assert_not_awaited()
+
+
+def test_orchestrator_shares_notice_between_saved_markdown_and_feishu(tmp_path, monkeypatch):
+    from src.models import IntelligenceRadarConfig, RadarRunMode
+    from src.services.webhook import WebhookNotifier
+    from src.models import WebhookConfig
+    from src.storage.manager import StorageManager
+    from tests.test_intelligence_presentation import presentation_fixture
+    from tests.test_coverage_notice import health, PARTIAL_NOTICE
+
+    monkeypatch.chdir(tmp_path)
+    selected, more = presentation_fixture()
+    items = [c.item for c in selected]
+    orchestrator = make_orchestrator()
+    orchestrator.email_manager = None
+    orchestrator.config = SimpleNamespace(email=None, delivery_allowed=True,
+        collection=SimpleNamespace(time_window_hours=24),
+        ai=SimpleNamespace(languages=["zh"]), digest=SimpleNamespace(profile_order=[]),
+        intelligence=IntelligenceRadarConfig(enabled=True, run_mode=RadarRunMode.MORNING,
+            candidate_store_file="candidates.jsonl",
+            delivery_store_file="deliveries.jsonl"))
+    orchestrator.profiles = SimpleNamespace(names={})
+    orchestrator.storage = StorageManager(data_dir=tmp_path / "data")
+    orchestrator.last_intelligence_candidates = selected + more
+    report = FetchReport([SourceFetchOutcome("Platform Trends", "success", items=items,
+        provider_health=[health("weibo", "dailyhot", "failed"),
+            health("douyin", "dailyhot", "healthy"), health("zhihu", "alapi_tophub", "healthy")])])
+
+    async def fetch(since):
+        orchestrator.last_fetch_report = report
+        return items
+
+    monkeypatch.setattr(orchestrator, "fetch_all_sources", fetch)
+    monkeypatch.setattr(orchestrator, "_determine_time_window", lambda hours: SINCE)
+    monkeypatch.setattr(orchestrator, "merge_cross_source_duplicates", lambda rows: rows)
+    monkeypatch.setattr(orchestrator, "_apply_social_quality_gate", lambda rows: rows)
+    monkeypatch.setattr(orchestrator, "_cache_path", lambda kind: tmp_path / f"{kind}.json")
+    monkeypatch.setattr(orchestrator, "_save_items_cache", lambda path, rows: None)
+    monkeypatch.setattr(orchestrator, "analyze_items", AsyncMock(return_value=items))
+    monkeypatch.setattr(orchestrator, "_select_intelligence_candidates",
+        lambda rows: SimpleNamespace(items=items, exclusion_stages={}))
+    monkeypatch.setattr(orchestrator, "enrich_items", AsyncMock(return_value=None))
+
+    monkeypatch.setenv("COVERAGE_TEST_WEBHOOK", "https://example.com/webhook")
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, platform="feishu", layout="collapsible",
+        url_env="COVERAGE_TEST_WEBHOOK"))
+    delivered = []
+
+    async def capture_delivery(**kwargs):
+        delivered.extend(notifier.build_daily_summary_messages(**kwargs))
+        return []
+
+    orchestrator.webhook_notifier = SimpleNamespace(send_daily_summary=capture_delivery)
+    asyncio.run(orchestrator.run())
+    summaries = list((tmp_path / "data" / "summaries").glob("*.md"))
+    assert len(summaries) == 1
+    assert PARTIAL_NOTICE in summaries[0].read_text(encoding="utf-8")
+    elements = delivered[0]["_request_body_override"]["card"]["body"]["elements"]
+    assert elements[1]["content"] == PARTIAL_NOTICE
+    assert all(str(c.item.url) in str(elements) for c in selected + more)

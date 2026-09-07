@@ -2132,3 +2132,59 @@ class TestSkipConsoleOutput:
         assert mock_console.print.call_count >= 1
         printed = " ".join(str(c) for c in mock_console.print.call_args_list)
         assert "not set" in printed.lower() or "empty" in printed.lower()
+
+
+def test_feishu_intelligence_keeps_same_coverage_notice_and_successful_items(monkeypatch):
+    from src.models import RadarRunMode
+    from src.processing.intelligence_brief import render_intelligence_brief
+    from tests.test_coverage_notice import PARTIAL_NOTICE
+    from tests.test_intelligence_presentation import presentation_fixture
+
+    monkeypatch.setenv(_TEST_URL_ENV, _TEST_URL)
+    selected, more = presentation_fixture()
+    brief = render_intelligence_brief(selected, more_candidates=more, date="2026-09-07",
+        run_mode=RadarRunMode.MORNING, total_fetched=50)
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, url_env=_TEST_URL_ENV,
+        platform="feishu", layout="collapsible"))
+    message = notifier.build_daily_summary_messages(summary=brief,
+        important_items=[c.item for c in selected], intelligence_candidates=selected,
+        intelligence_more_candidates=more, all_items_count=50, date="2026-09-07",
+        lang="zh", summarizer=DailySummarizer(), coverage_notice=PARTIAL_NOTICE)[0]
+    elements = message["_request_body_override"]["card"]["body"]["elements"]
+    assert elements[1] == {"tag": "markdown", "content": PARTIAL_NOTICE}
+    assert all(str(c.item.url) in str(elements) for c in selected + more)
+    assert str(elements).count(PARTIAL_NOTICE) == 1
+
+
+def test_send_daily_summary_passes_coverage_to_card_without_network(monkeypatch):
+    from tests.test_coverage_notice import PARTIAL_NOTICE
+
+    monkeypatch.setenv(_TEST_URL_ENV, _TEST_URL)
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, url_env=_TEST_URL_ENV,
+        platform="feishu", layout="collapsible"))
+    sent = []
+
+    async def capture(variables):
+        sent.append(variables)
+        from src.services.webhook import WebhookDeliveryResult, WebhookDeliveryStatus
+        return WebhookDeliveryResult(status=WebhookDeliveryStatus.SUCCESS)
+
+    monkeypatch.setattr(notifier, "notify", capture)
+    _run_async(notifier.send_daily_summary(summary="", important_items=[],
+        intelligence_candidates=[], all_items_count=0, date="2026-09-07", lang="zh",
+        summarizer=DailySummarizer(), coverage_notice=PARTIAL_NOTICE))
+    assert PARTIAL_NOTICE in str(sent[0]["_request_body_override"])
+
+
+def test_coverage_parameter_preserves_existing_positional_candidate_arguments(monkeypatch):
+    from tests.test_intelligence_presentation import presentation_fixture
+
+    monkeypatch.setenv(_TEST_URL_ENV, _TEST_URL)
+    selected, more = presentation_fixture()
+    notifier = WebhookNotifier(WebhookConfig(enabled=True, url_env=_TEST_URL_ENV,
+        platform="feishu", layout="collapsible"))
+    message = notifier.build_daily_summary_messages("", [c.item for c in selected],
+        50, "2026-09-07", "zh", DailySummarizer(), selected, more)[0]
+    elements = message["_request_body_override"]["card"]["body"]["elements"]
+    assert all(str(c.item.url) in str(elements) for c in selected + more)
+    assert not any(isinstance(e.get("content"), list) for e in elements)

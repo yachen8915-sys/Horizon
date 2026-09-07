@@ -80,6 +80,7 @@ from .processing.content_type_gate import (
 from .processing.intelligence_selection import IntelligenceSelector
 from .processing.delivery_selection import DeliverySelector
 from .processing.intelligence_brief import render_intelligence_brief
+from .processing.coverage_notice import build_platform_coverage_notice
 from .diagnostics.intelligence_report import build_intelligence_report
 from .storage.candidate_export import export_candidates
 from .storage.candidate_store import CandidateStore
@@ -731,6 +732,9 @@ class HorizonOrchestrator:
                 )
 
             # 7. Generate and save daily summaries for each configured language
+            coverage_notice = build_platform_coverage_notice(
+                self.last_fetch_report.to_dict() if self.last_fetch_report else None
+            ) if self.config.intelligence.enabled else None
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             for lang in self.config.ai.languages:
                 summarizer = DailySummarizer(
@@ -744,6 +748,7 @@ class HorizonOrchestrator:
                         date=today,
                         run_mode=self.config.intelligence.run_mode,
                         total_fetched=len(all_items),
+                        coverage_notice=coverage_notice,
                     )
                 else:
                     summary = await summarizer.generate_summary(
@@ -816,6 +821,7 @@ class HorizonOrchestrator:
                         date=today,
                         lang=lang,
                         summarizer=summarizer,
+                        coverage_notice=coverage_notice,
                         intelligence_candidates=(
                             delivery_selection.candidates
                             if self.config.intelligence.enabled

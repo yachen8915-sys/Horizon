@@ -21,6 +21,7 @@ def render_intelligence_brief(
     date: str,
     run_mode: RadarRunMode,
     total_fetched: int,
+    coverage_notice: str | None = None,
 ) -> str:
     mode_label = (
         "上午全量"
@@ -34,6 +35,8 @@ def render_intelligence_brief(
         "",
         f"精选 {len(candidates)} 条 / 抓取 {total_fetched} 条",
     ]
+    if coverage_notice:
+        lines.extend(["", coverage_notice])
     presentation = build_intelligence_presentation(candidates, more_candidates or [])
     for heading, section_candidates in presentation.sections():
         lines.extend(["", heading, ""])

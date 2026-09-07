@@ -93,3 +93,14 @@ def test_brief_keeps_capacity_tail_in_more_section() -> None:
 
     assert "## 查看更多热点" in brief
     assert "[Title more](https://example.com/more)" in brief
+
+
+def test_brief_places_shared_coverage_notice_next_to_selection_summary():
+    from tests.test_coverage_notice import PARTIAL_NOTICE
+
+    candidate = _candidate("douyin", DecisionLane.HOT_CONTENT)
+    brief = render_intelligence_brief([candidate], date="2026-09-07",
+        run_mode=RadarRunMode.MORNING, total_fetched=10, coverage_notice=PARTIAL_NOTICE)
+    assert f"精选 1 条 / 抓取 10 条\n\n{PARTIAL_NOTICE}" in brief
+    assert brief.index(PARTIAL_NOTICE) < brief.index("## 今日运营热点")
+    assert str(candidate.item.url) in brief

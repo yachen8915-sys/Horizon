@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections import Counter
 from collections import defaultdict
+from dataclasses import fields
 from typing import Any
 
-from ..models import CandidateRecord
+from ..models import CandidateRecord, CandidateStatus, ReasonCode
+from ..processing.coverage_notice import build_platform_coverage_notice
+from ..processing.intelligence_presentation import build_intelligence_presentation
 
 
 def build_intelligence_report(
@@ -29,6 +32,11 @@ def build_intelligence_report(
     else:
         pipeline_status = "no_qualified_updates"
 
+    presentation = build_intelligence_presentation(
+        [candidate for candidate in candidates if candidate.status is CandidateStatus.SELECTED],
+        [candidate for candidate in candidates if candidate.status is CandidateStatus.HELD
+         and ReasonCode.HELD_BY_CAPACITY in candidate.reason_codes],
+    )
     funnel = Counter(candidate.status.value for candidate in candidates)
     lanes = Counter(
         candidate.intelligence.primary_lane.value
@@ -92,6 +100,15 @@ def build_intelligence_report(
         "run_mode": run_mode,
         "pipeline_status": pipeline_status,
         "source_health": source_health,
+        "presentation_categories": {
+            field.name: len(getattr(presentation, field.name))
+            for field in fields(presentation)
+        },
+        "trend_pools": {
+            "leverage": len(presentation.hot_leverage),
+            "watch": len(presentation.hot_watch),
+        },
+        "coverage_notice": build_platform_coverage_notice(fetch_report),
         "funnel": dict(sorted(funnel.items())),
         "decision_lanes": dict(sorted(lanes.items())),
         "reason_codes": dict(sorted(reasons.items())),

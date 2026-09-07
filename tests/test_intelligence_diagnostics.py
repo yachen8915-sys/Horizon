@@ -31,6 +31,7 @@ def _candidate(candidate_id: str, status: CandidateStatus, lane: DecisionLane, a
             url=f"https://example.com/{candidate_id}",
             author=author,
             published_at=NOW,
+            profile="pangmen-platform-trend-radar" if lane is DecisionLane.HOT_CONTENT else None,
             metadata={"source_id": "official-rss", "content_platform": "web"},
         ),
         status=status,
@@ -181,3 +182,33 @@ def test_archive_counts_only_capacity_held_candidates_as_more(
 
     report = json.loads(paths["diagnostics"].read_text(encoding="utf-8"))
     assert report["card_capacity"]["more"] == 1
+
+
+def test_diagnostic_categories_and_pools_match_shared_presentation():
+    from dataclasses import fields
+    from src.processing.intelligence_presentation import build_intelligence_presentation
+    from tests.test_intelligence_presentation import presentation_fixture
+    from tests.test_coverage_notice import partial_report, PARTIAL_NOTICE
+
+    selected, more = presentation_fixture()
+    observation = _candidate("immature", CandidateStatus.HELD, DecisionLane.HOT_CONTENT, "a")
+    observation.reason_codes = [ReasonCode.IMMATURE]
+    presentation = build_intelligence_presentation(selected, more)
+    report = build_intelligence_report(run_id="coverage", candidates=selected + more + [observation],
+        fetch_report=partial_report())
+    assert report["presentation_categories"] == {
+        f.name: len(getattr(presentation, f.name)) for f in fields(presentation)}
+    assert report["trend_pools"] == {"leverage": 1, "watch": 1}
+    assert report["coverage_notice"] == PARTIAL_NOTICE
+
+
+def test_diagnostic_presentation_counts_include_ai_overflow():
+    from tests.test_intelligence_presentation import _ai_capacity_fixture
+
+    ai, hot, held = _ai_capacity_fixture(19)
+    report = build_intelligence_report(run_id="overflow", candidates=[*ai, hot, held], fetch_report=None)
+    counts = report["presentation_categories"]
+    assert sum(counts[field] for field in ("ai_product", "ai_technical", "ai_industry")) == 16
+    assert counts["more_ai"] == 4
+    assert report["trend_pools"] == {"leverage": 1, "watch": 0}
+    assert report["coverage_notice"] is None

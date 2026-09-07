@@ -494,12 +494,14 @@ class WebhookNotifier:
         content_radar: bool = False,
         intelligence_candidates: list[CandidateRecord] | None = None,
         intelligence_more_candidates: list[CandidateRecord] | None = None,
+        coverage_notice: str | None = None,
     ) -> dict[str, Any]:
         """Build a single Feishu Card JSON 2.0 message with collapsed item details."""
         if intelligence_candidates is not None or intelligence_more_candidates is not None:
             return self._build_feishu_intelligence_body(
                 intelligence_candidates or [], intelligence_more_candidates or [],
                 all_items_count=all_items_count, date=date, lang=lang, summarizer=summarizer,
+                coverage_notice=coverage_notice,
             )
         overview = self._build_feishu_collapsible_overview(
             item_count=len(important_items),
@@ -738,12 +740,15 @@ class WebhookNotifier:
         date: str,
         lang: str,
         summarizer: DailySummarizer,
+        coverage_notice: str | None = None,
     ) -> dict[str, Any]:
         presentation = build_intelligence_presentation(selected, more)
         elements = [_markdown(self._build_feishu_collapsible_overview(
             item_count=len(selected), all_items_count=all_items_count,
             date=date, lang=lang, topic_radar=False, content_radar=True,
         ))]
+        if coverage_notice:
+            elements.append(_markdown(coverage_notice))
         for heading, candidates in presentation.sections():
             elements.append(_markdown(heading))
             compact = candidates is presentation.more_ai or candidates is presentation.more_hot
@@ -802,6 +807,7 @@ class WebhookNotifier:
         summarizer: DailySummarizer,
         intelligence_candidates: list[CandidateRecord] | None = None,
         intelligence_more_candidates: list[CandidateRecord] | None = None,
+        coverage_notice: str | None = None,
     ) -> List[dict[str, Any]]:
         """Build the variables for all webhook messages for one language."""
         webhook_languages = getattr(self.config, "languages", None)
@@ -855,6 +861,7 @@ class WebhookNotifier:
                         topic_radar=topic_radar,
                         content_radar=content_radar,
                         intelligence_candidates=intelligence_candidates,
+                        coverage_notice=coverage_notice,
                         intelligence_more_candidates=intelligence_more_candidates,
                     ),
                 }
@@ -1153,6 +1160,7 @@ class WebhookNotifier:
         summarizer: DailySummarizer,
         intelligence_candidates: list[CandidateRecord] | None = None,
         intelligence_more_candidates: list[CandidateRecord] | None = None,
+        coverage_notice: str | None = None,
     ) -> list[WebhookDeliveryResult]:
         """Send daily summary webhook notification.
 
@@ -1175,6 +1183,7 @@ class WebhookNotifier:
             lang=lang,
             summarizer=summarizer,
             intelligence_candidates=intelligence_candidates,
+            coverage_notice=coverage_notice,
             intelligence_more_candidates=intelligence_more_candidates,
         )
         if not messages:
